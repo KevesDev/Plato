@@ -9,6 +9,10 @@ interface Message {
     content: string;
 }
 
+/**
+ * Production-grade Copilot Sidebar.
+ * Manages conversation history and real-time streaming from the Rust Inference Engine.
+ */
 export const CopilotSidebar: React.FC = () => {
     const [input, setInput] = useState('');
     const [isStreaming, setIsStreaming] = useState(false);
@@ -48,22 +52,31 @@ export const CopilotSidebar: React.FC = () => {
 
     const handleSend = async () => {
         if (!input.trim() || isStreaming) return;
+        
         const userText = input.trim();
+        const userMessage: Message = { id: `u-${Date.now()}`, role: 'user', content: userText };
         const responseId = `ai-${Date.now()}`;
         
-        const history = messages.map(m => ({ 
+        /**
+         * MEMORY FIX: We construct the full conversation context by combining 
+         * existing messages with the current user prompt before sending to Rust.
+         */
+        const currentMessages = [...messages, userMessage];
+        const history = currentMessages.map(m => ({ 
             role: m.role === 'ai' ? 'assistant' : 'user', 
             content: m.content 
         }));
         
-        setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', content: userText }]);
+        setMessages(currentMessages);
         setInput('');
         setIsStreaming(true);
         
         try {
-            const config = { temperature: 0.7, top_p: 0.9, min_keep: 1, top_k: 40, repeat_penalty: 1.15, repeat_last_n: 64 };
-            await invoke('stream_chat_completion', { message_id: responseId, history, config });
+            const config = { temperature: 0.7, top_p: 0.9, min_keep: 1, top_k: 40, repeat_penalty: 1.2, repeat_last_n: 64 };
+            // Tauri invokes camelCase keys into snake_case Rust arguments automatically.
+            await invoke('stream_chat_completion', { messageId: responseId, history, config });
         } catch (error) {
+            console.error('[Plato IPC Error]:', error);
             setIsStreaming(false);
         }
     };
@@ -79,7 +92,7 @@ export const CopilotSidebar: React.FC = () => {
             <div className="flex-grow overflow-y-auto p-4 space-y-4">
                 {messages.map(msg => (
                     <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                        <div className={`max-w-[90%] p-3 rounded-lg text-sm shadow-sm ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border'}`}>
+                        <div className={`max-w-[90%] p-3 rounded-lg text-sm shadow-sm ${msg.role === 'user' ? 'bg-blue-600 text-white shadow-blue-200' : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700'}`}>
                             {msg.content}
                             {msg.role === 'ai' && isStreaming && msg.id === messages[messages.length - 1]?.id && (
                                 <span className="inline-block w-2 h-4 ml-1 bg-slate-400 animate-pulse align-middle" />
@@ -88,7 +101,7 @@ export const CopilotSidebar: React.FC = () => {
                     </div>
                 ))}
             </div>
-            <div className="p-4 border-t border-gray-200 bg-slate-50 dark:bg-slate-900">
+            <div className="p-4 border-t border-gray-200 dark:border-gray-800 bg-slate-50 dark:bg-slate-900">
                 <div className="relative">
                     <textarea 
                         className="w-full pl-3 pr-12 py-3 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm h-[80px] resize-none outline-none focus:ring-1 focus:ring-blue-500 text-slate-900 dark:text-slate-100"

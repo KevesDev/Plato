@@ -3,7 +3,6 @@ import { $getSelection, $isRangeSelection, COMMAND_PRIORITY_LOW, createCommand, 
 import { useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import { $createAIGeneratedNode } from '../nodes/AIGeneratedNode';
 
 export const TRIGGER_AI_GEN_COMMAND: LexicalCommand<void> = createCommand();
 
@@ -17,17 +16,12 @@ export default function AICompletionPlugin(): null {
             unlistenFn = await listen<{ message_id: string; token: string; is_final: boolean }>(
                 'chat_token',
                 (event) => {
-                    const { message_id, token, is_final } = event.payload;
-                    
-                    // Only process tokens intended for the inline editor
+                    const { message_id, token } = event.payload;
                     if (!message_id.startsWith('inline-')) return;
 
                     editor.update(() => {
                         const selection = $getSelection();
                         if ($isRangeSelection(selection)) {
-                            // Find or create the node for this stream
-                            // For Sprint 2, we append to the current selection
-                            // Implementation detail: Logic for targeting specific nodes will scale in Sprint 4
                             selection.insertText(token);
                         }
                     });
@@ -37,7 +31,6 @@ export default function AICompletionPlugin(): null {
 
         setupListener();
 
-        // Standard Keyboard Shortcut: Ctrl+J
         const unregisterCommand = editor.registerCommand(
             TRIGGER_AI_GEN_COMMAND,
             () => {
@@ -48,7 +41,7 @@ export default function AICompletionPlugin(): null {
                     
                     invoke('stream_chat_completion', {
                         messageId,
-                        prompt: `Continue this story: ${textContent}`,
+                        history: [{ role: 'user', content: `Continue this story: ${textContent}` }],
                         config: { 
                             temperature: 0.8, 
                             top_p: 0.9, 

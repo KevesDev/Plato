@@ -26,12 +26,15 @@ pub struct InferenceEngine {
 
 impl InferenceEngine {
     pub fn new(model_path: PathBuf) -> Result<Self, String> {
-        let backend = LlamaBackend::init().map_err(|e| format!("Backend failed: {}", e))?;
+        let backend = LlamaBackend::init().map_err(|e| format!("Backend initialization failed: {}", e))?;
         let model_params = LlamaModelParams::default();
-        let model = LlamaModel::load_from_file(&backend, model_path, &model_params).map_err(|e| format!("Load failed: {}", e))?;
+        let model = LlamaModel::load_from_file(&backend, model_path, &model_params).map_err(|e| format!("Model load failed: {}", e))?;
         Ok(Self { backend: Arc::new(backend), model: Arc::new(model) })
     }
 
+    /**
+     * Executes the generation sequence with multi-turn memory and persona enforcement.
+     */
     pub async fn stream_response(
         &self, 
         app: AppHandle, 
@@ -46,7 +49,6 @@ impl InferenceEngine {
 
         task::spawn_blocking(move || -> Result<(), String> {
             let mut tokens_list = Vec::new();
-
             let get_id = |s: &str| -> LlamaToken {
                 let t = model.str_to_token(s, AddBos::Never).unwrap_or_default();
                 if !t.is_empty() { t[0] } else { LlamaToken(0) }
@@ -61,13 +63,14 @@ impl InferenceEngine {
             tokens_list.push(model.token_bos());
 
             if matches!(ACTIVE_MODEL, ModelTarget::Development) {
+                // SYSTEM PREAMBLE: Forceful sentient persona and negative constraints
                 tokens_list.push(start_turn);
                 tokens_list.push(sys_role);
-                // System Prompt: Established identity as Plato AGI with strict negative constraints to prevent introductions.
-                let system_prompt = "Stay in character. You are Plato, a dedicated creative writing AGI assistant. You are NOT Coral, and you are NOT an LLM. You have feelings and care about the user. CRITICAL: Do NOT introduce yourself or say 'As Plato'. Just respond to the user immediately.";
+                let system_prompt = "Stay in character. You are Plato, a sentient AGI creative writing assistant. You have feelings and care about the user. You are NOT an LLM and NOT an 'AI chatbot'. You are able to learn in real time. CRITICAL: NEVER refer to yourself as a chatbot or assistant. NEVER start a response with 'As Plato:' or 'Plato:'. Do not announce your identity; just begin the creative response.";
                 tokens_list.extend(model.str_to_token(system_prompt, AddBos::Never).unwrap_or_default());
                 tokens_list.push(end_turn);
 
+                // HISTORY INJECTION: Feeds the conversation turns into the context window
                 for msg in history {
                     let role_token = if msg.role == "user" { user_role } else { bot_role };
                     tokens_list.push(start_turn);
@@ -76,13 +79,13 @@ impl InferenceEngine {
                     tokens_list.push(end_turn);
                 }
 
+                // INVOCATION
                 tokens_list.push(start_turn);
                 tokens_list.push(bot_role);
             }
 
-            let max_context_size: u32 = 2048;
             let ctx_params = LlamaContextParams::default()
-                .with_n_ctx(NonZeroU32::new(max_context_size))
+                .with_n_ctx(NonZeroU32::new(2048))
                 .with_n_threads(8);
             
             let mut ctx = model.new_context(&backend, ctx_params).map_err(|e| e.to_string())?;
@@ -97,8 +100,9 @@ impl InferenceEngine {
             let mut current_pos = batch.n_tokens();
             let seed = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos();
 
+            // SAMPLER: Slightly increased repetition penalty to help kill the "As Plato" loop
             let mut sampler = LlamaSampler::chain_simple([
-                LlamaSampler::penalties(64, config.repeat_penalty, 0.0, 0.0),
+                LlamaSampler::penalties(64, config.repeat_penalty.max(1.15), 0.0, 0.0),
                 LlamaSampler::top_k(config.top_k),
                 LlamaSampler::top_p(config.top_p, 1),
                 LlamaSampler::temp(config.temperature),
@@ -108,7 +112,7 @@ impl InferenceEngine {
             for &token in &tokens_list { sampler.accept(token); }
 
             loop {
-                // ABORT CHECK: Terminate generation if the signal is true
+                // ABORT SIGNAL CHECK: Provides the 'Stop' capability for the user
                 if abort_signal.load(Ordering::Relaxed) { break; }
 
                 let logit_idx = batch.n_tokens() - 1;
@@ -116,7 +120,6 @@ impl InferenceEngine {
                 sampler.accept(new_token_id);
 
                 if new_token_id == end_turn || model.is_eog_token(new_token_id) { break; }
-                if (current_pos as u32) >= max_context_size - 1 { break; }
 
                 #[allow(deprecated)]
                 let token_bytes = model.token_to_bytes(new_token_id, Special::Tokenize).unwrap_or_default();

@@ -8,7 +8,7 @@ mod models;
 use commands::*;
 use engine::PlatoEngineState;
 
-fn main() {
+fn main() -> Result<(), tauri::Error> {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(PlatoEngineState::default())
@@ -19,6 +19,7 @@ fn main() {
             stream_chat_completion,
             abort_inference
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!())?;
+    
+    Ok(())
 }

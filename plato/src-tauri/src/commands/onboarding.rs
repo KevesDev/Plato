@@ -28,11 +28,6 @@ fn get_active_models() -> &'static [(&'static str, &'static str)] {
     }
 }
 
-/**
- * Resolves the true storage URL and file size.
- * Following redirects manually guarantees that the Range header is preserved across
- * the LFS-to-S3 infrastructure, allowing for protocol-compliant resumable downloads.
- */
 async fn resolve_remote_parity(client: &reqwest::Client, url: &str) -> Result<(String, u64), String> {
     let res = client.head(url).send().await.map_err(|e| e.to_string())?;
     let final_url = res.url().to_string();

@@ -7,9 +7,14 @@ import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin';
 import { PaginatedCanvasWrapper } from './plugins/PaginatedCanvasWrapper';
 import { AIGeneratedNode } from './nodes/AIGeneratedNode';
 import AICompletionPlugin from './plugins/AICompletionPlugin';
-import editorTheme from './theme';
+// Using named import to match the export structure in theme.ts
+import { theme as editorTheme } from './theme';
 
-const PlatoEditor: React.FC = () => {
+/**
+ * The core Lexical editor component for Plato.
+ * Uses a named export to align with the routing/import logic in App.tsx.
+ */
+export const PlatoEditor: React.FC = () => {
     const initialConfig = useMemo(() => ({
         namespace: 'PlatoEditor',
         theme: editorTheme,
@@ -43,5 +48,3 @@ const PlatoEditor: React.FC = () => {
         </LexicalComposer>
     );
 };
-
-export default PlatoEditor;
