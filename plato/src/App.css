@@ -7,8 +7,7 @@
 
 /**
  * Global Styles for Plato
- * Establishes a focused writing environment with high-fidelity typography
- * and appropriate elevation for the document canvas.
+ * Establishes a focused writing environment with high-fidelity typography.
  */
 :root {
   background-color: #f8fafc;

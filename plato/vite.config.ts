@@ -4,8 +4,8 @@ import tailwindcss from "@tailwindcss/vite";
 
 /**
  * Vite Configuration for Plato
- * Integrated with Tailwind v4 for high-performance styling and 
- * optimized for Tauri's IPC requirements.
+ * Optimized for React 19 and Tailwind v4. 
+ * Establishes a high-performance HMR bridge for Tauri v2.
  */
 export default defineConfig(async () => ({
   plugins: [

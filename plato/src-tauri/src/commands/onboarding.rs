@@ -1,7 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter, Manager}; // Corrected: Manager trait included for .path()
+use tauri::{AppHandle, Emitter, Manager};
 use futures_util::StreamExt;
 use crate::models::{IpcResponse, DownloadProgressEvent};
 
@@ -24,13 +24,16 @@ pub async fn verify_and_download_model(app: AppHandle) -> Result<IpcResponse<boo
     let mut base_path = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     base_path.push(MODEL_DIR);
 
+    // Ensure the models directory exists within the AppData scope
     if !base_path.exists() {
         fs::create_dir_all(&base_path).map_err(|e| e.to_string())?;
     }
 
+    // Step 1: Verification Check
     let mut all_files_exist = true;
     for (filename, _) in MODEL_FILES {
-        if !base_path.join(filename).exists() {
+        let file_path = base_path.join(filename);
+        if !file_path.exists() {
             all_files_exist = false;
             break;
         }
@@ -40,6 +43,7 @@ pub async fn verify_and_download_model(app: AppHandle) -> Result<IpcResponse<boo
         return Ok(IpcResponse { success: true, data: Some(true), error_message: None });
     }
 
+    // Step 2: Multi-part Streaming Download
     let client = reqwest::Client::new();
     let total_parts = MODEL_FILES.len() as u32;
 
@@ -47,7 +51,10 @@ pub async fn verify_and_download_model(app: AppHandle) -> Result<IpcResponse<boo
         let part_current = (index + 1) as u32;
         let file_path = base_path.join(filename);
 
-        if file_path.exists() { continue; }
+        // Skip chunks that are already fully downloaded
+        if file_path.exists() {
+            continue; 
+        }
 
         let res = client.get(*url).send().await.map_err(|e| e.to_string())?;
         let total_bytes = res.content_length().unwrap_or(0);
@@ -65,8 +72,10 @@ pub async fn verify_and_download_model(app: AppHandle) -> Result<IpcResponse<boo
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result.map_err(|e| e.to_string())?;
             file.write_all(&chunk).map_err(|e| e.to_string())?;
+            
             downloaded_bytes += chunk.len() as u64;
 
+            // Emit the granular progress state to the React frontend
             let _ = app.emit("download_progress", DownloadProgressEvent {
                 part_current,
                 part_total: total_parts,
