@@ -1,7 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager}; // Corrected: Manager trait included for .path()
 use futures_util::StreamExt;
 use crate::models::{IpcResponse, DownloadProgressEvent};
 
@@ -15,6 +15,10 @@ const MODEL_FILES: &[(&str, &str)] = &[
     ("c4ai-command-r-plus-Q4_K_M-00006-of-00006.gguf", "https://huggingface.co/bartowski/c4ai-command-r-plus-GGUF/resolve/main/c4ai-command-r-plus-Q4_K_M-00006-of-00006.gguf"),
 ];
 
+/**
+ * Validates the existence of all necessary model chunks. 
+ * If missing, initiates a multi-part streaming download, emitting progress directly to the UI thread.
+ */
 #[tauri::command]
 pub async fn verify_and_download_model(app: AppHandle) -> Result<IpcResponse<bool>, String> {
     let mut base_path = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));

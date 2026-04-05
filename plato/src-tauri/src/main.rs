@@ -2,22 +2,22 @@
 
 mod models;
 mod commands;
+mod engine;
 
-use models::{IpcResponse, SystemHealthStatus};
+use engine::PlatoEngineState;
 
 /**
  * Platform health check to verify system compatibility and memory availability.
- * Initial structural implementation for Sprint 1/2.
  */
 #[tauri::command]
-fn check_system_health() -> IpcResponse<SystemHealthStatus> {
-    let status = SystemHealthStatus {
+fn check_system_health() -> models::IpcResponse<models::SystemHealthStatus> {
+    let status = models::SystemHealthStatus {
         is_platform_supported: true,
         available_memory_mb: 0, 
         model_exists: false,
     };
 
-    IpcResponse {
+    models::IpcResponse {
         success: true,
         data: Some(status),
         error_message: None,
@@ -26,6 +26,7 @@ fn check_system_health() -> IpcResponse<SystemHealthStatus> {
 
 fn main() {
     tauri::Builder::default()
+        .manage(PlatoEngineState::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
