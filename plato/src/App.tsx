@@ -15,7 +15,10 @@ function App() {
     const [isEngineReady, setIsEngineReady] = useState<boolean>(false);
 
     useEffect(() => {
-        // Invokes the Rust verification and download sequence upon application mount
+        /**
+         * Invokes the Rust verification and download sequence upon mount.
+         * Ensures the 62.8GB Command R+ model is present before editor access.
+         */
         invoke('verify_and_download_model')
             .then(() => {
                 setIsEngineReady(true);
@@ -25,7 +28,7 @@ function App() {
             });
     }, []);
 
-    // Block access to the main application until assets are verified
+    // Block access to the main application until local assets are verified
     if (!isEngineReady) {
         return <OnboardingScreen />;
     }

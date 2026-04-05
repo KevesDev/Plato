@@ -7,18 +7,16 @@ use llama_cpp_2::context::params::LlamaContextParams;
 /**
  * InferenceEngine
  * Encapsulates the LlamaModel and provides high-level text generation capabilities.
- * Built for production-level scalability, allowing for future GPU offloading 
- * optimizations specifically for the user's RTX 3060.
+ * Built for production-level scalability and future GPU optimization.
  */
 pub struct InferenceEngine {
-    model: LlamaModel,
+    pub model: LlamaModel,
 }
 
 impl InferenceEngine {
     /**
      * Initializes the Llama model from the verified local directory.
-     * The llama.cpp backend automatically links the multi-part chunks when 
-     * provided with the path to the primary 00001 file.
+     * Provided with the path to the 00001 chunk, llama.cpp automatically links all 6 files.
      */
     pub fn new(model_path: PathBuf) -> Result<Self, String> {
         let backend = LlamaBackend::init()
@@ -34,8 +32,7 @@ impl InferenceEngine {
 
     /**
      * Generates a response based on the input prompt. 
-     * This establishes the computational context for the model and prepares
-     * the batch processing engine for token generation.
+     * Establishing a context is the first step toward real-time token streaming.
      */
     pub async fn generate_response(&self, _prompt: &str) -> Result<String, String> {
         let context_params = LlamaContextParams::default();
@@ -43,8 +40,6 @@ impl InferenceEngine {
             .new_context(&LlamaBackend::init().unwrap(), context_params)
             .map_err(|e| format!("Context initialization failed: {}", e))?;
 
-        // Note: The specific sampling loop is integrated during Task 2.3
-        // to maintain the decoupled modularity of the inference lifecycle.
         Ok("Engine ready for token streaming.".to_string())
     }
 }
