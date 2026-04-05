@@ -30,9 +30,6 @@ impl InferenceEngine {
         Ok(Self { backend: Arc::new(backend), model: Arc::new(model) })
     }
 
-    /**
-     * Executes the generation sequence for the specified model architecture.
-     */
     pub async fn stream_response(
         &self, 
         app: AppHandle, 
@@ -47,7 +44,7 @@ impl InferenceEngine {
         task::spawn_blocking(move || -> Result<(), String> {
             let mut tokens_list = Vec::new();
 
-            // Resolves Cohere-specific control tokens required for Command R+ and Aya 23 formatting.
+            // COHERE / COMMAND R+ SPECIAL TOKENS
             let get_id = |s: &str| -> LlamaToken {
                 let t = model.str_to_token(s, AddBos::Never).unwrap_or_default();
                 if !t.is_empty() { t[0] } else { LlamaToken(0) }
@@ -63,10 +60,11 @@ impl InferenceEngine {
 
             match ACTIVE_MODEL {
                 ModelTarget::Development => {
-                    // System Boundary
+                    // System Boundary - Hardened Persona
                     tokens_list.push(start_turn);
                     tokens_list.push(sys_role);
-                    tokens_list.extend(model.str_to_token("You are Plato, a creative writing assistant.", AddBos::Never).unwrap_or_default());
+                    let system_prompt = "You are Plato, a dedicated creative writing AI assistant for a local IDE. You are NOT Coral, and you are NOT associated with Cohere. Provide helpful, professional, and concise answers focused on creative writing.";
+                    tokens_list.extend(model.str_to_token(system_prompt, AddBos::Never).unwrap_or_default());
                     tokens_list.push(end_turn);
                     
                     // User Boundary
@@ -80,15 +78,13 @@ impl InferenceEngine {
                     tokens_list.push(bot_role);
                 },
                 ModelTarget::Production => {
-                    // Defers to frontend formatting protocols for production payloads.
                     tokens_list.extend(model.str_to_token(&prompt, AddBos::Never).unwrap_or_default());
                 }
             }
 
             let max_context_size: u32 = 2048;
             
-            // Restricts execution to 8 physical threads to prevent matrix multiplication 
-            // desynchronization across heterogeneous CPU architectures (e.g., Intel P/E cores).
+            // Restricts execution to 8 physical threads to prevent math desynchronization
             let ctx_params = LlamaContextParams::default()
                 .with_n_ctx(NonZeroU32::new(max_context_size))
                 .with_n_threads(8);
@@ -104,8 +100,7 @@ impl InferenceEngine {
 
             let mut current_pos = batch.n_tokens();
             
-            // Establishes a stochastic sampling chain with a bounded temperature floor 
-            // to prevent determinism-induced repetition loops.
+            // STOCHASTIC SAMPLER
             let temp = if config.temperature <= 0.0 { 0.7 } else { config.temperature };
             let repeat_penalty = if config.repeat_penalty <= 1.0 { 1.1 } else { config.repeat_penalty };
             let seed = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos();

@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { FileText } from 'lucide-react';
 
 interface Message {
@@ -21,23 +21,41 @@ export const CopilotSidebar: React.FC = () => {
     const [messages, setMessages] = useState<Message[]>([
         { id: 'system-1', role: 'ai', content: 'Plato Engine initialized. Ready for prompt.' }
     ]);
+    
+    // Use a ref to guarantee we only bind the listener once
+    const listenerBound = useRef(false);
 
     useEffect(() => {
-        const unlisten = listen<ChatTokenEvent>('chat_token', (event) => {
-            const { message_id, token, is_final } = event.payload;
-            setMessages(prev => {
-                const existingIndex = prev.findIndex(m => m.id === message_id);
-                if (existingIndex >= 0) {
-                    const updated = [...prev];
-                    updated[existingIndex].content += token;
-                    return updated;
-                } else {
-                    return [...prev, { id: message_id, role: 'ai', content: token }];
-                }
+        let unlistenFn: UnlistenFn | undefined;
+
+        const setupListener = async () => {
+            if (listenerBound.current) return;
+            listenerBound.current = true;
+
+            unlistenFn = await listen<ChatTokenEvent>('chat_token', (event) => {
+                const { message_id, token, is_final } = event.payload;
+                setMessages(prev => {
+                    const existingIndex = prev.findIndex(m => m.id === message_id);
+                    if (existingIndex >= 0) {
+                        const updated = [...prev];
+                        updated[existingIndex].content += token;
+                        return updated;
+                    } else {
+                        return [...prev, { id: message_id, role: 'ai', content: token }];
+                    }
+                });
+                if (is_final) setIsStreaming(false);
             });
-            if (is_final) setIsStreaming(false);
-        });
-        return () => { unlisten.then(f => f()); };
+        };
+
+        setupListener();
+
+        return () => {
+            if (unlistenFn) {
+                unlistenFn();
+                listenerBound.current = false;
+            }
+        };
     }, []);
 
     const handleSend = async () => {
@@ -45,9 +63,11 @@ export const CopilotSidebar: React.FC = () => {
         const prompt = input.trim();
         const messageId = Date.now().toString();
         const responseId = `ai-${messageId}`;
+        
         setMessages(prev => [...prev, { id: messageId, role: 'user', content: prompt }]);
         setInput('');
         setIsStreaming(true);
+        
         try {
             const config = { temperature: 0.7, top_p: 0.9, min_keep: 1, top_k: 40, repeat_penalty: 1.1, repeat_last_n: 64 };
             await invoke('stream_chat_completion', { messageId: responseId, prompt, config });

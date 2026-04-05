@@ -4,7 +4,5 @@ import App from "./App";
 import "./App.css"; // Establishes global Tailwind v4 styling at the root
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
+  <App />
 );
