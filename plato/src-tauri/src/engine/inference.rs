@@ -28,6 +28,10 @@ impl InferenceEngine {
         Ok(Self { backend: Arc::new(backend), model: Arc::new(model) })
     }
 
+    /**
+     * Executes the generative loop using a dynamic Sampler Chain.
+     * Prevents deterministic collapse through repetition penalties and nucleus sampling.
+     */
     pub async fn stream_response(
         &self, 
         app: AppHandle, 
@@ -67,7 +71,6 @@ impl InferenceEngine {
             let mut n_cur = batch.n_tokens();
             
             // Sampler chain combines creative variety with loop penalties.
-            // Signatures verified for llama-cpp-2 v0.1.141.
             let mut sampler = LlamaSampler::chain_simple([
                 LlamaSampler::dist(42), 
                 LlamaSampler::temp(config.temperature), 

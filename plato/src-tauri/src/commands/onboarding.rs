@@ -28,6 +28,10 @@ fn get_active_models() -> &'static [(&'static str, &'static str)] {
     }
 }
 
+/**
+ * Validates the local model cache against remote server metadata.
+ * Uses a 0-byte GET probe to extract total file size from the Content-Range header.
+ */
 #[tauri::command]
 pub async fn check_model_status(app: AppHandle) -> Result<IpcResponse<bool>, String> {
     let mut base_path = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -68,6 +72,10 @@ pub async fn check_model_status(app: AppHandle) -> Result<IpcResponse<bool>, Str
     Ok(IpcResponse { success: true, data: Some(ready), error_message: None })
 }
 
+/**
+ * Orchestrates multi-part model downloads with pre-flight parity checks.
+ * Prevents 416 errors by verifying byte alignment before requesting ranges.
+ */
 #[tauri::command]
 pub async fn start_model_download(app: AppHandle) -> Result<IpcResponse<bool>, String> {
     let mut base_path = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -92,9 +100,7 @@ pub async fn start_model_download(app: AppHandle) -> Result<IpcResponse<bool>, S
 
         let clean_local_size = fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
 
-        // --- PRE-FLIGHT PARITY CHECK ---
-        // Fetch remote size first. If local size matches, skip to the next file.
-        // This prevents the 416 Range Not Satisfiable error by avoiding unnecessary requests.
+        // Pre-flight probe to determine the true remote file size
         let mut remote_size = 0u64;
         if let Ok(res) = client.get(*url).header(RANGE, "bytes=0-0").send().await {
             if let Some(content_range) = res.headers().get(CONTENT_RANGE) {
@@ -106,6 +112,7 @@ pub async fn start_model_download(app: AppHandle) -> Result<IpcResponse<bool>, S
             }
         }
 
+        // Parity Check: If file is complete, emit 100% and proceed
         if remote_size > 0 && clean_local_size == remote_size {
              let _ = app.emit("download_progress", DownloadProgressEvent { 
                 part_current, 
