@@ -11,9 +11,9 @@
   },
   "dependencies": {
     "@lexical/react": "^0.23.1",
-    "@tauri-apps/api": "^2.0.0",
-    "@tauri-apps/plugin-opener": "^2.0.0",
-    "@tauri-apps/plugin-shell": "^2.0.0",
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-opener": "^2.5.3",
+    "@tauri-apps/plugin-shell": "^2.3.5",
     "lexical": "^0.23.1",
     "lucide-react": "^0.477.0",
     "react": "^19.0.0",
@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
-    "@tauri-apps/cli": "^2.0.0",
+    "@tauri-apps/cli": "^2.10.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",

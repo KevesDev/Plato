@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 
 // --- Workspace & State Models ---
 
-#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Clone)]
 pub struct WorkspaceState {
     pub active_directory_path: Option<String>,

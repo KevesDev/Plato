@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import { FileText, Square, Send } from 'lucide-react';
+import { FolderOpen, Square, Send, FileText, DatabaseZap } from 'lucide-react';
 
 interface Message {
     id: string;
@@ -9,9 +9,15 @@ interface Message {
     content: string;
 }
 
+interface WorkspaceState {
+    active_directory_path: string | null;
+    indexed_file_count: number;
+    is_indexing: boolean;
+}
+
 /**
  * Production-grade Copilot Sidebar.
- * Manages conversation history and real-time streaming from the Rust Inference Engine.
+ * Manages conversation history, real-time token streaming, and workspace directory mapping.
  */
 export const CopilotSidebar: React.FC = () => {
     const [input, setInput] = useState('');
@@ -19,6 +25,11 @@ export const CopilotSidebar: React.FC = () => {
     const [messages, setMessages] = useState<Message[]>([
         { id: 'sys-init', role: 'ai', content: 'Plato AGI online. Ready to build your world.' }
     ]);
+    const [workspace, setWorkspace] = useState<WorkspaceState>({
+        active_directory_path: null,
+        indexed_file_count: 0,
+        is_indexing: false
+    });
     const listenerBound = useRef(false);
 
     useEffect(() => {
@@ -45,6 +56,41 @@ export const CopilotSidebar: React.FC = () => {
         return () => { if (unlistenFn) unlistenFn(); listenerBound.current = false; };
     }, []);
 
+    const handleSelectWorkspace = async () => {
+        try {
+            const response = await invoke<{ success: boolean; data?: WorkspaceState }>('select_and_scan_workspace');
+            if (response.success && response.data) {
+                setWorkspace(response.data);
+            }
+        } catch (error) {
+            console.error('[Workspace Error]:', error);
+        }
+    };
+
+    const handleSyncDatabase = async () => {
+        if (!workspace.active_directory_path || workspace.is_indexing) return;
+        
+        setWorkspace(prev => ({ ...prev, is_indexing: true }));
+        try {
+            const response = await invoke<{ success: boolean; data?: number }>('start_workspace_ingestion', { 
+                path: workspace.active_directory_path 
+            });
+            
+            if (response.success) {
+                setMessages(prev => [...prev, { 
+                    id: `sys-${Date.now()}`, 
+                    role: 'ai', 
+                    // Elevated the success message to match the sentient AGI persona
+                    content: `Memory synchronization complete. I have woven ${response.data} passages from your vault into my consciousness. I am ready.` 
+                }]);
+            }
+        } catch (error) {
+            console.error('[Ingestion Error]:', error);
+        } finally {
+            setWorkspace(prev => ({ ...prev, is_indexing: false }));
+        }
+    };
+
     const handleStop = async () => {
         await invoke('abort_inference');
         setIsStreaming(false);
@@ -58,8 +104,8 @@ export const CopilotSidebar: React.FC = () => {
         const responseId = `ai-${Date.now()}`;
         
         /**
-         * MEMORY FIX: We construct the full conversation context by combining 
-         * existing messages with the current user prompt before sending to Rust.
+         * Assembles the chronological conversation context by appending the 
+         * current user prompt prior to dispatching to the inference engine.
          */
         const currentMessages = [...messages, userMessage];
         const history = currentMessages.map(m => ({ 
@@ -73,7 +119,6 @@ export const CopilotSidebar: React.FC = () => {
         
         try {
             const config = { temperature: 0.7, top_p: 0.9, min_keep: 1, top_k: 40, repeat_penalty: 1.2, repeat_last_n: 64 };
-            // Tauri invokes camelCase keys into snake_case Rust arguments automatically.
             await invoke('stream_chat_completion', { messageId: responseId, history, config });
         } catch (error) {
             console.error('[Plato IPC Error]:', error);
@@ -85,8 +130,27 @@ export const CopilotSidebar: React.FC = () => {
         <div className="flex flex-col h-full bg-white dark:bg-gray-900 border-l border-slate-200 dark:border-slate-800 font-sans">
             <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between bg-slate-50 dark:bg-slate-900">
                 <h2 className="font-semibold text-slate-800 dark:text-slate-200">Plato Copilot</h2>
-                <div className="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100">
-                    <FileText size={14} /> <span>{messages.length} Turns</span>
+                
+                <div className="flex items-center gap-2">
+                    {workspace.active_directory_path && (
+                        <button 
+                            onClick={handleSyncDatabase}
+                            disabled={workspace.is_indexing}
+                            className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-md border transition-colors shadow-sm ${workspace.is_indexing ? 'bg-indigo-50 text-indigo-400 border-indigo-200 cursor-wait' : 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-100 cursor-pointer'}`}
+                            title="Sync Lore to Memory Matrix"
+                        >
+                            <DatabaseZap size={14} className={workspace.is_indexing ? "animate-pulse" : ""} />
+                            <span className="font-medium">{workspace.is_indexing ? "Syncing..." : "Sync DB"}</span>
+                        </button>
+                    )}
+                    <button 
+                        onClick={handleSelectWorkspace}
+                        className="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 px-3 py-1.5 rounded-md border border-blue-200 hover:bg-blue-100 transition-colors shadow-sm cursor-pointer"
+                        title={workspace.active_directory_path || "Select your Story Vault"}
+                    >
+                        <FolderOpen size={14} /> 
+                        <span className="font-medium">{workspace.indexed_file_count} Files</span>
+                    </button>
                 </div>
             </div>
             <div className="flex-grow overflow-y-auto p-4 space-y-4">
