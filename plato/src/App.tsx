@@ -4,6 +4,7 @@ import { MainLayout } from './components/layout/MainLayout';
 import { PlatoEditor } from './components/editor/PlatoEditor';
 import { CopilotSidebar } from './components/copilot/CopilotSidebar';
 import { OnboardingScreen } from './components/onboarding/OnboardingScreen';
+import { IpcResponse } from './types/ipc.types';
 import './App.css'; 
 
 /**
@@ -13,24 +14,37 @@ import './App.css';
  */
 function App() {
     const [isEngineReady, setIsEngineReady] = useState<boolean>(false);
+    const [isChecking, setIsChecking] = useState<boolean>(true);
 
     useEffect(() => {
         /**
-         * Invokes the Rust verification and download sequence upon mount.
-         * Ensures the 62.8GB Command R+ model is present before editor access.
+         * Performs a non-blocking check for local model assets.
+         * If assets are missing, the UI remains in Onboarding state.
          */
-        invoke('verify_and_download_model')
-            .then(() => {
-                setIsEngineReady(true);
-            })
-            .catch((error) => {
+        const checkStatus = async () => {
+            try {
+                const response = await invoke<IpcResponse<boolean>>('check_model_status');
+                if (response.success && response.data) {
+                    setIsEngineReady(true);
+                }
+            } catch (error) {
                 console.error("Critical Engine Failure:", error);
-            });
+            } finally {
+                setIsChecking(false);
+            }
+        };
+
+        checkStatus();
     }, []);
 
-    // Block access to the main application until local assets are verified
+    // Show a blank or loading state while the integrity check is running
+    if (isChecking) {
+        return <div className="w-screen h-screen bg-slate-50 dark:bg-slate-950" />;
+    }
+
+    // Force onboarding if the model integrity check fails
     if (!isEngineReady) {
-        return <OnboardingScreen />;
+        return <OnboardingScreen onComplete={() => setIsEngineReady(true)} />;
     }
 
     return (
