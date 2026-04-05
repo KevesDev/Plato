@@ -3,15 +3,24 @@ use tauri::{AppHandle, Manager, State};
 use tokio::task;
 use crate::engine::PlatoEngineState;
 use crate::engine::inference::InferenceEngine;
-use crate::models::IpcResponse;
+use crate::models::{IpcResponse, ACTIVE_MODEL, ModelTarget};
 
 const MODEL_DIR: &str = "models";
-// Configured for the lightweight Dev model to fit in 32GB RAM
-const PRIMARY_CHUNK: &str = "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf";
 
 /**
- * Orchestrates the transition of the LlamaModel from disk to RAM.
- * Executed immediately after the onboarding download succeeds.
+ * Dynamically maps the target environment to the corresponding primary GGUF chunk.
+ * The underlying C++ bindings automatically discover trailing sequential chunks.
+ */
+fn get_primary_chunk() -> &'static str {
+    match ACTIVE_MODEL {
+        ModelTarget::Development => "aya-23-8b-q4_k_m.gguf",
+        ModelTarget::Production => "c4ai-command-r-plus-Q4_K_M-00001-of-00006.gguf",
+    }
+}
+
+/**
+ * Initializes the C++ binding context and mounts the model weights to system RAM.
+ * Offloaded to a blocking thread to preserve application UI responsiveness during high I/O.
  */
 #[tauri::command]
 pub async fn initialize_engine(
@@ -20,16 +29,13 @@ pub async fn initialize_engine(
 ) -> Result<IpcResponse<bool>, String> {
     let mut base_path = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     base_path.push(MODEL_DIR);
-    base_path.push(PRIMARY_CHUNK);
+    base_path.push(get_primary_chunk());
 
     let mut engine_guard = state.engine.lock().await;
 
-    // Prevent redundant memory allocations if the engine is already active
     if engine_guard.is_none() {
         let model_path = base_path.clone();
         
-        // Disk I/O and C++ binding initialization is heavily blocking.
-        // Offloading to a dedicated thread ensures the application remains responsive.
         let engine = task::spawn_blocking(move || {
             InferenceEngine::new(model_path)
         }).await.map_err(|e| format!("Thread panic during initialization: {}", e))??;

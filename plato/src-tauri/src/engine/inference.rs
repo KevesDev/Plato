@@ -24,16 +24,14 @@ pub struct InferenceEngine {
 
 impl InferenceEngine {
     pub fn new(model_path: PathBuf) -> Result<Self, String> {
-        let backend = LlamaBackend::init().map_err(|e| format!("Backend failed: {}", e))?;
+        let backend = LlamaBackend::init().map_err(|e| format!("Backend initialization failed: {}", e))?;
         let model_params = LlamaModelParams::default();
-        let model = LlamaModel::load_from_file(&backend, model_path, &model_params).map_err(|e| format!("Load failed: {}", e))?;
+        let model = LlamaModel::load_from_file(&backend, model_path, &model_params).map_err(|e| format!("Model load failed: {}", e))?;
         Ok(Self { backend: Arc::new(backend), model: Arc::new(model) })
     }
 
     /**
-     * Executes inference via Thread-Locked Synchronous Context.
-     * Prevents NaN logit collapse by explicitly binding to 8 threads (P-cores)
-     * to prevent hybrid architecture desynchronization during matrix multiplication.
+     * Executes the generation sequence for the specified model architecture.
      */
     pub async fn stream_response(
         &self, 
@@ -49,46 +47,48 @@ impl InferenceEngine {
         task::spawn_blocking(move || -> Result<(), String> {
             let mut tokens_list = Vec::new();
 
-            // 1. EXACT LLAMA 3.1 BINARY IDS
-            let bos = LlamaToken(128000);
-            let start = LlamaToken(128006);
-            let end = LlamaToken(128007);
-            let eot = LlamaToken(128009);
-            let lf = LlamaToken(198); // The Newline Token
+            // Resolves Cohere-specific control tokens required for Command R+ and Aya 23 formatting.
+            let get_id = |s: &str| -> LlamaToken {
+                let t = model.str_to_token(s, AddBos::Never).unwrap_or_default();
+                if !t.is_empty() { t[0] } else { LlamaToken(0) }
+            };
 
-            tokens_list.push(bos);
+            let start_turn = get_id("<|START_OF_TURN_TOKEN|>");
+            let end_turn = get_id("<|END_OF_TURN_TOKEN|>");
+            let sys_role = get_id("<|SYSTEM_TOKEN|>");
+            let user_role = get_id("<|USER_TOKEN|>");
+            let bot_role = get_id("<|CHATBOT_TOKEN|>");
+
+            tokens_list.push(model.token_bos());
 
             match ACTIVE_MODEL {
                 ModelTarget::Development => {
-                    // Absolute Binary Precision: Inject exactly what the Attention Heads demand.
-                    tokens_list.push(start);
-                    tokens_list.extend(model.str_to_token("system", AddBos::Never).unwrap_or_default());
-                    tokens_list.push(end);
-                    tokens_list.push(lf); tokens_list.push(lf); // \n\n
+                    // System Boundary
+                    tokens_list.push(start_turn);
+                    tokens_list.push(sys_role);
                     tokens_list.extend(model.str_to_token("You are Plato, a creative writing assistant.", AddBos::Never).unwrap_or_default());
-                    tokens_list.push(eot);
+                    tokens_list.push(end_turn);
                     
-                    tokens_list.push(start);
-                    tokens_list.extend(model.str_to_token("user", AddBos::Never).unwrap_or_default());
-                    tokens_list.push(end);
-                    tokens_list.push(lf); tokens_list.push(lf); // \n\n
+                    // User Boundary
+                    tokens_list.push(start_turn);
+                    tokens_list.push(user_role);
                     tokens_list.extend(model.str_to_token(&prompt, AddBos::Never).unwrap_or_default());
-                    tokens_list.push(eot);
+                    tokens_list.push(end_turn);
                     
-                    tokens_list.push(start);
-                    tokens_list.extend(model.str_to_token("assistant", AddBos::Never).unwrap_or_default());
-                    tokens_list.push(end);
-                    tokens_list.push(lf); tokens_list.push(lf); // \n\n
+                    // Assistant Invocation
+                    tokens_list.push(start_turn);
+                    tokens_list.push(bot_role);
                 },
                 ModelTarget::Production => {
+                    // Defers to frontend formatting protocols for production payloads.
                     tokens_list.extend(model.str_to_token(&prompt, AddBos::Never).unwrap_or_default());
                 }
             }
 
             let max_context_size: u32 = 2048;
             
-            // 2. HARDWARE FIX: Restrict to 8 threads (P-Cores only) 
-            // This prevents E-Core desync and the resulting NaN math collapse.
+            // Restricts execution to 8 physical threads to prevent matrix multiplication 
+            // desynchronization across heterogeneous CPU architectures (e.g., Intel P/E cores).
             let ctx_params = LlamaContextParams::default()
                 .with_n_ctx(NonZeroU32::new(max_context_size))
                 .with_n_threads(8);
@@ -97,7 +97,6 @@ impl InferenceEngine {
             let mut batch = LlamaBatch::new(512, 1);
             let last_idx = tokens_list.len().saturating_sub(1);
 
-            // Ingest prompt into KV Cache
             for (i, &token) in tokens_list.iter().enumerate() {
                 batch.add(token, i as i32, &[0], i == last_idx).map_err(|e| e.to_string())?;
             }
@@ -105,7 +104,8 @@ impl InferenceEngine {
 
             let mut current_pos = batch.n_tokens();
             
-            // 3. Stochastic Sampler 
+            // Establishes a stochastic sampling chain with a bounded temperature floor 
+            // to prevent determinism-induced repetition loops.
             let temp = if config.temperature <= 0.0 { 0.7 } else { config.temperature };
             let repeat_penalty = if config.repeat_penalty <= 1.0 { 1.1 } else { config.repeat_penalty };
             let seed = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos();
@@ -125,14 +125,12 @@ impl InferenceEngine {
                 let new_token_id = sampler.sample(&ctx, logit_idx);
                 sampler.accept(new_token_id);
 
-                if new_token_id == eot || model.is_eog_token(new_token_id) { break; }
+                if new_token_id == end_turn || model.is_eog_token(new_token_id) { break; }
                 if (current_pos as u32) >= max_context_size - 1 { break; }
 
                 #[allow(deprecated)]
                 let token_bytes = model.token_to_bytes(new_token_id, Special::Tokenize).unwrap_or_default();
                 let token_str = String::from_utf8_lossy(&token_bytes).to_string();
-
-                if token_str.contains("<|eot_id|>") { break; }
 
                 let _ = app.emit("chat_token", ChatTokenEvent { 
                     message_id: message_id_clone.clone(), token: token_str, is_final: false 

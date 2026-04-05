@@ -9,7 +9,7 @@ use crate::models::{IpcResponse, DownloadProgressEvent, ACTIVE_MODEL, ModelTarge
 const MODEL_DIR: &str = "models";
 
 const DEV_MODELS: &[(&str, &str)] = &[
-    ("Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")
+    ("aya-23-8b-q4_k_m.gguf", "https://huggingface.co/AIronMind/aya-23-8B-Q4_K_M-GGUF/resolve/main/aya-23-8b-q4_k_m.gguf")
 ];
 
 const PROD_MODELS: &[(&str, &str)] = &[
@@ -30,8 +30,8 @@ fn get_active_models() -> &'static [(&'static str, &'static str)] {
 
 /**
  * Resolves the true storage URL and file size.
- * Following redirects manually ensures the Range header is preserved across the
- * LFS-to-S3 infrastructure, which is the industry standard for resumable downloads.
+ * Following redirects manually guarantees that the Range header is preserved across
+ * the LFS-to-S3 infrastructure, allowing for protocol-compliant resumable downloads.
  */
 async fn resolve_remote_parity(client: &reqwest::Client, url: &str) -> Result<(String, u64), String> {
     let res = client.head(url).send().await.map_err(|e| e.to_string())?;

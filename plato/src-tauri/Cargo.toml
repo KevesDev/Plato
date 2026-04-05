@@ -17,8 +17,10 @@ serde_json = "1.0"
 reqwest = { version = "0.13", features = ["stream"] }
 tokio = { version = "1.0", features = ["full"] }
 futures-util = "0.3"
-# The 'sampler' feature is required for stateful penalty tracking and nucleus sampling
-llama-cpp-2 = { version = "0.1", features = ["sampler"] }
+# The 'sampler' feature enables stateful penalty tracking and nucleus sampling.
+# GPU features (e.g., 'vulkan') are intentionally omitted to comply with the 
+# strict CPU/RAM-only execution constraint of the target production environment.
+llama-cpp-2 = { version = "0.1.141", features = ["sampler"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

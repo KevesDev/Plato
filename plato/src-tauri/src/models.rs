@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-// --- Phase 1: Workspace & State Models ---
+// --- Workspace & State Models ---
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct WorkspaceState {
@@ -9,6 +9,7 @@ pub struct WorkspaceState {
     pub is_indexing: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SystemHealthStatus {
     pub is_platform_supported: bool,
@@ -16,18 +17,19 @@ pub struct SystemHealthStatus {
     pub model_exists: bool,
 }
 
-// --- Phase 2: Inference & Engine Models ---
+// --- Inference & Engine Models ---
 
 /**
- * MASTER SWITCH: Toggle this to ModelTarget::Production to switch 
- * the entire application stack to Command R+ (104B).
+ * Defines the active execution environment. 
+ * Toggling this to ModelTarget::Production switches the pipeline
+ * from the local 8B scout model (Aya 23) to the 104B production model (Command R+).
  */
 pub const ACTIVE_MODEL: ModelTarget = ModelTarget::Development;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ModelTarget {
-    Development, // Llama 3.1 8B
-    Production,  // Command R+ 104B
+    Development, 
+    Production,  
 }
 
 #[derive(Serialize, Deserialize, Clone)]
