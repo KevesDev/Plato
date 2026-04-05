@@ -1,23 +1,21 @@
-pub mod inference;
-
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use self::inference::InferenceEngine;
+use std::sync::atomic::AtomicBool;
+use crate::engine::inference::InferenceEngine;
 
-/**
- * PlatoEngineState
- * Manages the persistent lifecycle of the LLM context.
- * This structure is managed by Tauri and injected into commands to ensure
- * the 62.8GB model remains resident in memory between prompts.
- */
+pub mod inference;
+
 pub struct PlatoEngineState {
     pub engine: Arc<Mutex<Option<InferenceEngine>>>,
+    // Thread-safe signal to kill active inference loops
+    pub abort_signal: Arc<AtomicBool>,
 }
 
-impl Default for PlatoEngineState {
-    fn default() -> Self {
+impl PlatoEngineState {
+    pub fn new() -> Self {
         Self {
             engine: Arc::new(Mutex::new(None)),
+            abort_signal: Arc::new(AtomicBool::new(false)),
         }
     }
 }

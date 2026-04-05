@@ -1,54 +1,47 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { LexicalComposer } from '@lexical/react/LexicalComposer';
-import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin';
 import { ContentEditable } from '@lexical/react/LexicalContentEditable';
-import { HistoryPlugin } from '@lexical/react/LexicalHistoryPlugin';
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary';
-
-import { platoEditorTheme } from './theme';
-import { AIGeneratedNode } from './nodes/AIGeneratedNode';
+import { HistoryPlugin } from '@lexical/react/LexicalHistoryPlugin';
+import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin';
 import { PaginatedCanvasWrapper } from './plugins/PaginatedCanvasWrapper';
+import { AIGeneratedNode } from './nodes/AIGeneratedNode';
+import AICompletionPlugin from './plugins/AICompletionPlugin';
+import editorTheme from './theme';
 
-/**
- * PlatoEditor Composition Root
- * Initializes the Lexical environment and mounts the necessary plugins.
- * Exposes a clean React component to the main application shell.
- */
-export const PlatoEditor: React.FC = () => {
-    const initialConfig = {
+const PlatoEditor: React.FC = () => {
+    const initialConfig = useMemo(() => ({
         namespace: 'PlatoEditor',
-        theme: platoEditorTheme,
-        // All custom nodes must be explicitly registered here before they can be instantiated
-        nodes: [
-            AIGeneratedNode
-        ],
+        theme: editorTheme,
         onError: (error: Error) => {
-            console.error('Lexical Engine Fault:', error);
+            console.error('[Lexical Error]:', error);
         },
-    };
+        nodes: [AIGeneratedNode],
+    }), []);
 
     return (
         <LexicalComposer initialConfig={initialConfig}>
-            <div className="relative flex-grow h-full overflow-hidden">
+            <div className="relative h-full w-full bg-slate-50 dark:bg-slate-950 overflow-hidden">
                 <PaginatedCanvasWrapper>
                     <RichTextPlugin
                         contentEditable={
                             <ContentEditable 
-                                className="outline-none min-h-full prose dark:prose-invert max-w-none text-gray-900 dark:text-gray-100" 
+                                className="min-h-[1056px] w-[816px] py-[96px] px-[96px] outline-none text-slate-900 dark:text-slate-100 leading-relaxed" 
                             />
                         }
                         placeholder={
-                            <div className="absolute top-20 left-16 text-gray-400 pointer-events-none select-none">
-                                Begin drafting...
+                            <div className="absolute top-[96px] left-[96px] text-slate-400 pointer-events-none select-none italic">
+                                Start weaving your story...
                             </div>
                         }
                         ErrorBoundary={LexicalErrorBoundary}
                     />
+                    <HistoryPlugin />
+                    <AICompletionPlugin />
                 </PaginatedCanvasWrapper>
-                
-                {/* Standard plugins for professional editor behavior */}
-                <HistoryPlugin />
             </div>
         </LexicalComposer>
     );
 };
+
+export default PlatoEditor;

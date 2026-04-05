@@ -19,17 +19,18 @@ pub struct SystemHealthStatus {
 
 // --- Inference & Engine Models ---
 
-/**
- * Defines the active execution environment. 
- * Toggling this to ModelTarget::Production switches the pipeline
- * from the local 8B scout model (Aya 23) to the 104B production model (Command R+).
- */
 pub const ACTIVE_MODEL: ModelTarget = ModelTarget::Development;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ModelTarget {
     Development, 
     Production,  
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import { FileText } from 'lucide-react';
+import { FileText, Square, Send } from 'lucide-react';
 
 interface Message {
     id: string;
@@ -9,36 +9,26 @@ interface Message {
     content: string;
 }
 
-interface ChatTokenEvent {
-    message_id: string;
-    token: string;
-    is_final: boolean;
-}
-
 export const CopilotSidebar: React.FC = () => {
     const [input, setInput] = useState('');
     const [isStreaming, setIsStreaming] = useState(false);
     const [messages, setMessages] = useState<Message[]>([
-        { id: 'system-1', role: 'ai', content: 'Plato Engine initialized. Ready for prompt.' }
+        { id: 'sys-1', role: 'ai', content: 'Plato AGI initialized. I am ready to help you write.' }
     ]);
-    
-    // Use a ref to guarantee we only bind the listener once
     const listenerBound = useRef(false);
 
     useEffect(() => {
         let unlistenFn: UnlistenFn | undefined;
-
-        const setupListener = async () => {
+        const setup = async () => {
             if (listenerBound.current) return;
             listenerBound.current = true;
-
-            unlistenFn = await listen<ChatTokenEvent>('chat_token', (event) => {
+            unlistenFn = await listen<{message_id: string, token: string, is_final: boolean}>('chat_token', (event) => {
                 const { message_id, token, is_final } = event.payload;
                 setMessages(prev => {
-                    const existingIndex = prev.findIndex(m => m.id === message_id);
-                    if (existingIndex >= 0) {
+                    const idx = prev.findIndex(m => m.id === message_id);
+                    if (idx >= 0) {
                         const updated = [...prev];
-                        updated[existingIndex].content += token;
+                        updated[idx].content += token;
                         return updated;
                     } else {
                         return [...prev, { id: message_id, role: 'ai', content: token }];
@@ -47,70 +37,72 @@ export const CopilotSidebar: React.FC = () => {
                 if (is_final) setIsStreaming(false);
             });
         };
-
-        setupListener();
-
-        return () => {
-            if (unlistenFn) {
-                unlistenFn();
-                listenerBound.current = false;
-            }
-        };
+        setup();
+        return () => { if (unlistenFn) unlistenFn(); listenerBound.current = false; };
     }, []);
+
+    const handleStop = async () => {
+        await invoke('abort_inference');
+        setIsStreaming(false);
+    };
 
     const handleSend = async () => {
         if (!input.trim() || isStreaming) return;
-        const prompt = input.trim();
-        const messageId = Date.now().toString();
-        const responseId = `ai-${messageId}`;
+        const userText = input.trim();
+        const responseId = `ai-${Date.now()}`;
         
-        setMessages(prev => [...prev, { id: messageId, role: 'user', content: prompt }]);
+        // Build history to send to backend for memory
+        const history = messages.map(m => ({ role: m.role === 'ai' ? 'assistant' : 'user', content: m.content }));
+        
+        setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', content: userText }]);
         setInput('');
         setIsStreaming(true);
         
         try {
-            const config = { temperature: 0.7, top_p: 0.9, min_keep: 1, top_k: 40, repeat_penalty: 1.1, repeat_last_n: 64 };
-            await invoke('stream_chat_completion', { messageId: responseId, prompt, config });
+            const config = { temperature: 0.7, top_p: 0.9, min_keep: 1, top_k: 40, repeat_penalty: 1.15, repeat_last_n: 64 };
+            await invoke('stream_chat_completion', { message_id: responseId, history, config });
         } catch (error) {
-            setMessages(prev => [...prev, { id: `err-${Date.now()}`, role: 'ai', content: `[Engine Failure]: ${error}` }]);
             setIsStreaming(false);
         }
     };
 
     return (
         <div className="flex flex-col h-full bg-white dark:bg-gray-900 border-l border-slate-200 dark:border-slate-800">
-            <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between bg-slate-50 dark:bg-slate-900">
+            <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
                 <h2 className="font-semibold text-slate-800 dark:text-slate-200">Plato Copilot</h2>
-                <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-2 py-1 rounded border border-blue-100 dark:border-blue-800">
-                    <FileText size={14} />
-                    <span>0 Files Indexed</span>
+                <div className="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100">
+                    <FileText size={14} /> <span>{messages.length} Turns</span>
                 </div>
             </div>
             <div className="flex-grow overflow-y-auto p-4 space-y-4">
                 {messages.map(msg => (
                     <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                        <div className={`max-w-[85%] p-3 rounded-lg text-sm shadow-sm whitespace-pre-wrap ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700'}`}>
+                        <div className={`max-w-[90%] p-3 rounded-lg text-sm ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-800 border'}`}>
                             {msg.content}
-                            {msg.role === 'ai' && isStreaming && msg.id === messages[messages.length - 1]?.id && (
-                                <span className="inline-block w-2 h-4 ml-1 bg-slate-400 animate-pulse align-middle" />
-                            )}
                         </div>
                     </div>
                 ))}
             </div>
-            <div className="p-4 border-t border-gray-200 dark:border-gray-800 bg-slate-50 dark:bg-slate-900">
-                <div className="relative flex items-center">
+            <div className="p-4 border-t border-gray-200 bg-slate-50">
+                <div className="relative">
                     <textarea 
-                        className="w-full pl-3 pr-10 py-3 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none h-[60px] text-slate-900 dark:text-slate-100"
-                        placeholder={isStreaming ? "Plato is drafting..." : "Ask about the lore..."}
+                        className="w-full pl-3 pr-12 py-3 bg-white border border-slate-300 rounded-lg text-sm h-[80px] resize-none"
+                        placeholder="Message Plato..."
                         value={input}
-                        disabled={isStreaming}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
                     />
-                    <button onClick={handleSend} disabled={isStreaming || !input.trim()} className={`absolute right-2 p-2 transition-colors ${isStreaming || !input.trim() ? 'text-slate-300 dark:text-slate-700' : 'text-slate-400 hover:text-blue-600 dark:hover:text-blue-400'}`}>
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-                    </button>
+                    <div className="absolute right-2 bottom-2 flex flex-col gap-2">
+                        {isStreaming ? (
+                            <button onClick={handleStop} className="p-2 text-red-500 hover:bg-red-50 rounded-full transition-colors">
+                                <Square size={18} fill="currentColor" />
+                            </button>
+                        ) : (
+                            <button onClick={handleSend} disabled={!input.trim()} className="p-2 text-blue-600 hover:bg-blue-50 disabled:text-slate-300">
+                                <Send size={18} />
+                            </button>
+                        )}
+                    </div>
                 </div>
             </div>
         </div>

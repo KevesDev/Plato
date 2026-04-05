@@ -1,25 +1,39 @@
+use std::sync::atomic::Ordering;
 use tauri::{AppHandle, State};
 use crate::engine::PlatoEngineState;
-use crate::models::{IpcResponse, InferenceConfig};
+use crate::models::{IpcResponse, InferenceConfig, ChatMessage};
 
-/**
- * Delegating completion command that bridges UI parameters to the inference loop.
- * Accepts a full InferenceConfig object for dynamic stylistic control.
- */
+#[tauri::command]
+pub async fn abort_inference(state: State<'_, PlatoEngineState>) -> Result<IpcResponse<bool>, String> {
+    state.abort_signal.store(true, Ordering::Relaxed);
+    Ok(IpcResponse { success: true, data: Some(true), error_message: None })
+}
+
 #[tauri::command]
 pub async fn stream_chat_completion(
     app: AppHandle,
     state: State<'_, PlatoEngineState>,
     message_id: String,
-    prompt: String,
+    history: Vec<ChatMessage>, 
     config: InferenceConfig,
-) -> Result<IpcResponse<bool>, String> {
-    let engine_guard = state.engine.lock().await;
-    
-    if let Some(engine) = engine_guard.as_ref() {
-        engine.stream_response(app, message_id, prompt, config).await?;
-        Ok(IpcResponse { success: true, data: Some(true), error_message: None })
+) -> Result<IpcResponse<String>, String> {
+    let engine_lock = state.engine.lock().await;
+
+    if let Some(engine) = &*engine_lock {
+        let engine_handle = engine.clone();
+        let abort_signal = state.abort_signal.clone();
+        
+        // Reset state for new generation turn
+        abort_signal.store(false, Ordering::Relaxed);
+        
+        tokio::spawn(async move {
+            if let Err(e) = engine_handle.stream_response(app, message_id, history, config, abort_signal).await {
+                eprintln!("[Engine Error]: {}", e);
+            }
+        });
+
+        Ok(IpcResponse { success: true, data: Some("Stream initialized".to_string()), error_message: None })
     } else {
-        Err("Critical Failure: Inference Engine memory address is null.".to_string())
+        Ok(IpcResponse { success: false, data: None, error_message: Some("Engine not loaded".to_string()) })
     }
 }

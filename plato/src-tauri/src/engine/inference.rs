@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::num::NonZeroU32;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
@@ -15,7 +16,7 @@ use llama_cpp_2::token::LlamaToken;
 
 #[allow(deprecated)]
 use llama_cpp_2::model::Special;
-use crate::models::{ChatTokenEvent, InferenceConfig, ACTIVE_MODEL, ModelTarget};
+use crate::models::{ChatTokenEvent, InferenceConfig, ChatMessage, ACTIVE_MODEL, ModelTarget};
 
 pub struct InferenceEngine {
     pub backend: Arc<LlamaBackend>,
@@ -24,9 +25,9 @@ pub struct InferenceEngine {
 
 impl InferenceEngine {
     pub fn new(model_path: PathBuf) -> Result<Self, String> {
-        let backend = LlamaBackend::init().map_err(|e| format!("Backend initialization failed: {}", e))?;
+        let backend = LlamaBackend::init().map_err(|e| format!("Backend failed: {}", e))?;
         let model_params = LlamaModelParams::default();
-        let model = LlamaModel::load_from_file(&backend, model_path, &model_params).map_err(|e| format!("Model load failed: {}", e))?;
+        let model = LlamaModel::load_from_file(&backend, model_path, &model_params).map_err(|e| format!("Load failed: {}", e))?;
         Ok(Self { backend: Arc::new(backend), model: Arc::new(model) })
     }
 
@@ -34,8 +35,9 @@ impl InferenceEngine {
         &self, 
         app: AppHandle, 
         message_id: String, 
-        prompt: String, 
-        config: InferenceConfig
+        history: Vec<ChatMessage>, 
+        config: InferenceConfig,
+        abort_signal: Arc<AtomicBool>,
     ) -> Result<(), String> {
         let message_id_clone = message_id.clone();
         let model = Arc::clone(&self.model);
@@ -44,7 +46,6 @@ impl InferenceEngine {
         task::spawn_blocking(move || -> Result<(), String> {
             let mut tokens_list = Vec::new();
 
-            // COHERE / COMMAND R+ SPECIAL TOKENS
             let get_id = |s: &str| -> LlamaToken {
                 let t = model.str_to_token(s, AddBos::Never).unwrap_or_default();
                 if !t.is_empty() { t[0] } else { LlamaToken(0) }
@@ -58,39 +59,34 @@ impl InferenceEngine {
 
             tokens_list.push(model.token_bos());
 
-            match ACTIVE_MODEL {
-                ModelTarget::Development => {
-                    // System Boundary - Hardened Persona
+            if matches!(ACTIVE_MODEL, ModelTarget::Development) {
+                // SYSTEM: Stronger persona alignment and negative constraints
+                tokens_list.push(start_turn);
+                tokens_list.push(sys_role);
+                let system_prompt = "You are Plato, a creative writing AGI assistant. You care for the user and provide concise responses. CRITICAL: Do NOT introduce yourself or say 'As Plato'. Just start the answer.";
+                tokens_list.extend(model.str_to_token(system_prompt, AddBos::Never).unwrap_or_default());
+                tokens_list.push(end_turn);
+
+                // HISTORY: Sequential ingestion for context memory
+                for msg in history {
+                    let role_token = if msg.role == "user" { user_role } else { bot_role };
                     tokens_list.push(start_turn);
-                    tokens_list.push(sys_role);
-                    let system_prompt = "You are Plato, a dedicated creative writing AI assistant for a local IDE. You are NOT Coral, and you are NOT associated with Cohere. Provide helpful, professional, and concise answers focused on creative writing.";
-                    tokens_list.extend(model.str_to_token(system_prompt, AddBos::Never).unwrap_or_default());
+                    tokens_list.push(role_token);
+                    tokens_list.extend(model.str_to_token(&msg.content, AddBos::Never).unwrap_or_default());
                     tokens_list.push(end_turn);
-                    
-                    // User Boundary
-                    tokens_list.push(start_turn);
-                    tokens_list.push(user_role);
-                    tokens_list.extend(model.str_to_token(&prompt, AddBos::Never).unwrap_or_default());
-                    tokens_list.push(end_turn);
-                    
-                    // Assistant Invocation
-                    tokens_list.push(start_turn);
-                    tokens_list.push(bot_role);
-                },
-                ModelTarget::Production => {
-                    tokens_list.extend(model.str_to_token(&prompt, AddBos::Never).unwrap_or_default());
                 }
+
+                tokens_list.push(start_turn);
+                tokens_list.push(bot_role);
             }
 
             let max_context_size: u32 = 2048;
-            
-            // Restricts execution to 8 physical threads to prevent math desynchronization
             let ctx_params = LlamaContextParams::default()
                 .with_n_ctx(NonZeroU32::new(max_context_size))
                 .with_n_threads(8);
             
             let mut ctx = model.new_context(&backend, ctx_params).map_err(|e| e.to_string())?;
-            let mut batch = LlamaBatch::new(512, 1);
+            let mut batch = LlamaBatch::new(1024, 1);
             let last_idx = tokens_list.len().saturating_sub(1);
 
             for (i, &token) in tokens_list.iter().enumerate() {
@@ -99,23 +95,22 @@ impl InferenceEngine {
             ctx.decode(&mut batch).map_err(|e| e.to_string())?;
 
             let mut current_pos = batch.n_tokens();
-            
-            // STOCHASTIC SAMPLER
-            let temp = if config.temperature <= 0.0 { 0.7 } else { config.temperature };
-            let repeat_penalty = if config.repeat_penalty <= 1.0 { 1.1 } else { config.repeat_penalty };
             let seed = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos();
 
             let mut sampler = LlamaSampler::chain_simple([
-                LlamaSampler::penalties(64, repeat_penalty, 0.0, 0.0),
-                LlamaSampler::top_k(40),
-                LlamaSampler::top_p(0.95, 1),
-                LlamaSampler::temp(temp),
+                LlamaSampler::penalties(64, config.repeat_penalty, 0.0, 0.0),
+                LlamaSampler::top_k(config.top_k),
+                LlamaSampler::top_p(config.top_p, 1),
+                LlamaSampler::temp(config.temperature),
                 LlamaSampler::dist(seed), 
             ]);
 
             for &token in &tokens_list { sampler.accept(token); }
 
             loop {
+                // ABORT CHECK: Immediate termination on UI signal
+                if abort_signal.load(Ordering::Relaxed) { break; }
+
                 let logit_idx = batch.n_tokens() - 1;
                 let new_token_id = sampler.sample(&ctx, logit_idx);
                 sampler.accept(new_token_id);
@@ -134,7 +129,6 @@ impl InferenceEngine {
                 batch.clear();
                 batch.add(new_token_id, current_pos, &[0], true).map_err(|e| e.to_string())?;
                 current_pos += 1;
-                
                 ctx.decode(&mut batch).map_err(|e| e.to_string())?;
             }
 
