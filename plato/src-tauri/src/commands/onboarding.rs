@@ -3,11 +3,12 @@ use std::io::Write;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager};
 use futures_util::StreamExt;
-use reqwest::header::RANGE;
+use reqwest::header::{RANGE, CONTENT_RANGE};
 use crate::models::{IpcResponse, DownloadProgressEvent};
 
 const MODEL_DIR: &str = "models";
 
+/** PRODUCTION FILES - REQUIRES 75+ RAM
 const MODEL_FILES: &[(&str, &str)] = &[
     ("c4ai-command-r-plus-Q4_K_M-00001-of-00006.gguf", "https://huggingface.co/bartowski/c4ai-command-r-plus-GGUF/resolve/main/c4ai-command-r-plus-Q4_K_M.gguf/c4ai-command-r-plus-Q4_K_M-00001-of-00006.gguf"),
     ("c4ai-command-r-plus-Q4_K_M-00002-of-00006.gguf", "https://huggingface.co/bartowski/c4ai-command-r-plus-GGUF/resolve/main/c4ai-command-r-plus-Q4_K_M.gguf/c4ai-command-r-plus-Q4_K_M-00002-of-00006.gguf"),
@@ -16,9 +17,21 @@ const MODEL_FILES: &[(&str, &str)] = &[
     ("c4ai-command-r-plus-Q4_K_M-00005-of-00006.gguf", "https://huggingface.co/bartowski/c4ai-command-r-plus-GGUF/resolve/main/c4ai-command-r-plus-Q4_K_M.gguf/c4ai-command-r-plus-Q4_K_M-00005-of-00006.gguf"),
     ("c4ai-command-r-plus-Q4_K_M-00006-of-00006.gguf", "https://huggingface.co/bartowski/c4ai-command-r-plus-GGUF/resolve/main/c4ai-command-r-plus-Q4_K_M.gguf/c4ai-command-r-plus-Q4_K_M-00006-of-00006.gguf"),
 ];
+**/
+
+// DEVELOPMENT MODEL: Llama 3.1 8B (4.9GB)
+// Fits in 32GB RAM for local testing.
+const MODEL_FILES: &[(&str, &str)] = &[
+    ("Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")
+];
+
+// NOTE: When deploying to production, comment out the array above 
+// and uncomment the Command R+ (104B) array.
 
 /**
  * Performs a rigorous integrity check on local model assets.
+ * Utilizes a 1-byte GET request to reliably extract the true remote file size,
+ * bypassing S3 HEAD restrictions that cause false-positive readiness flags.
  */
 #[tauri::command]
 pub async fn check_model_status(app: AppHandle) -> Result<IpcResponse<bool>, String> {
@@ -49,11 +62,23 @@ pub async fn check_model_status(app: AppHandle) -> Result<IpcResponse<bool>, Str
         if local_size < 1_000_000 {
             let _ = fs::remove_file(&file_path);
             ready = false;
-        } else if let Ok(res) = client.head(*url).send().await {
-            if res.status().is_success() {
-                if let Some(remote_size) = res.content_length() {
-                    // Prevent deletion if S3 accidentally strips the length header (returns 0)
-                    if local_size != remote_size && remote_size > 0 {
+        } else {
+            // Force a 1-byte GET request to extract the true total size from the Content-Range header.
+            // Expected format: "bytes 0-0/4920000000"
+            if let Ok(res) = client.get(*url).header(RANGE, "bytes=0-0").send().await {
+                if let Some(content_range) = res.headers().get(CONTENT_RANGE) {
+                    if let Ok(range_str) = content_range.to_str() {
+                        if let Some(total_str) = range_str.split('/').last() {
+                            if let Ok(remote_size) = total_str.parse::<u64>() {
+                                if local_size != remote_size {
+                                    ready = false;
+                                }
+                            }
+                        }
+                    }
+                } else if let Some(remote_size) = res.content_length() {
+                    // Fallback for non-chunked responses
+                    if local_size != remote_size {
                         ready = false;
                     }
                 }
