@@ -13,7 +13,7 @@ export const CopilotSidebar: React.FC = () => {
     const [input, setInput] = useState('');
     const [isStreaming, setIsStreaming] = useState(false);
     const [messages, setMessages] = useState<Message[]>([
-        { id: 'sys-1', role: 'ai', content: 'Plato AGI initialized. I am ready to help you write.' }
+        { id: 'sys-init', role: 'ai', content: 'Plato AGI online. Ready to build your world.' }
     ]);
     const listenerBound = useRef(false);
 
@@ -51,8 +51,10 @@ export const CopilotSidebar: React.FC = () => {
         const userText = input.trim();
         const responseId = `ai-${Date.now()}`;
         
-        // Build history to send to backend for memory
-        const history = messages.map(m => ({ role: m.role === 'ai' ? 'assistant' : 'user', content: m.content }));
+        const history = messages.map(m => ({ 
+            role: m.role === 'ai' ? 'assistant' : 'user', 
+            content: m.content 
+        }));
         
         setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', content: userText }]);
         setInput('');
@@ -67,8 +69,8 @@ export const CopilotSidebar: React.FC = () => {
     };
 
     return (
-        <div className="flex flex-col h-full bg-white dark:bg-gray-900 border-l border-slate-200 dark:border-slate-800">
-            <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+        <div className="flex flex-col h-full bg-white dark:bg-gray-900 border-l border-slate-200 dark:border-slate-800 font-sans">
+            <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between bg-slate-50 dark:bg-slate-900">
                 <h2 className="font-semibold text-slate-800 dark:text-slate-200">Plato Copilot</h2>
                 <div className="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100">
                     <FileText size={14} /> <span>{messages.length} Turns</span>
@@ -77,16 +79,19 @@ export const CopilotSidebar: React.FC = () => {
             <div className="flex-grow overflow-y-auto p-4 space-y-4">
                 {messages.map(msg => (
                     <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                        <div className={`max-w-[90%] p-3 rounded-lg text-sm ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-800 border'}`}>
+                        <div className={`max-w-[90%] p-3 rounded-lg text-sm shadow-sm ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border'}`}>
                             {msg.content}
+                            {msg.role === 'ai' && isStreaming && msg.id === messages[messages.length - 1]?.id && (
+                                <span className="inline-block w-2 h-4 ml-1 bg-slate-400 animate-pulse align-middle" />
+                            )}
                         </div>
                     </div>
                 ))}
             </div>
-            <div className="p-4 border-t border-gray-200 bg-slate-50">
+            <div className="p-4 border-t border-gray-200 bg-slate-50 dark:bg-slate-900">
                 <div className="relative">
                     <textarea 
-                        className="w-full pl-3 pr-12 py-3 bg-white border border-slate-300 rounded-lg text-sm h-[80px] resize-none"
+                        className="w-full pl-3 pr-12 py-3 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm h-[80px] resize-none outline-none focus:ring-1 focus:ring-blue-500 text-slate-900 dark:text-slate-100"
                         placeholder="Message Plato..."
                         value={input}
                         onChange={(e) => setInput(e.target.value)}

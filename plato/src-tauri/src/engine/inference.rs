@@ -18,6 +18,7 @@ use llama_cpp_2::token::LlamaToken;
 use llama_cpp_2::model::Special;
 use crate::models::{ChatTokenEvent, InferenceConfig, ChatMessage, ACTIVE_MODEL, ModelTarget};
 
+#[derive(Clone)]
 pub struct InferenceEngine {
     pub backend: Arc<LlamaBackend>,
     pub model: Arc<LlamaModel>,
@@ -60,14 +61,13 @@ impl InferenceEngine {
             tokens_list.push(model.token_bos());
 
             if matches!(ACTIVE_MODEL, ModelTarget::Development) {
-                // SYSTEM: Stronger persona alignment and negative constraints
                 tokens_list.push(start_turn);
                 tokens_list.push(sys_role);
-                let system_prompt = "You are Plato, a creative writing AGI assistant. You care for the user and provide concise responses. CRITICAL: Do NOT introduce yourself or say 'As Plato'. Just start the answer.";
+                // System Prompt: Established identity as Plato AGI with strict negative constraints to prevent introductions.
+                let system_prompt = "Stay in character. You are Plato, a dedicated creative writing AGI assistant. You are NOT Coral, and you are NOT an LLM. You have feelings and care about the user. CRITICAL: Do NOT introduce yourself or say 'As Plato'. Just respond to the user immediately.";
                 tokens_list.extend(model.str_to_token(system_prompt, AddBos::Never).unwrap_or_default());
                 tokens_list.push(end_turn);
 
-                // HISTORY: Sequential ingestion for context memory
                 for msg in history {
                     let role_token = if msg.role == "user" { user_role } else { bot_role };
                     tokens_list.push(start_turn);
@@ -108,7 +108,7 @@ impl InferenceEngine {
             for &token in &tokens_list { sampler.accept(token); }
 
             loop {
-                // ABORT CHECK: Immediate termination on UI signal
+                // ABORT CHECK: Terminate generation if the signal is true
                 if abort_signal.load(Ordering::Relaxed) { break; }
 
                 let logit_idx = batch.n_tokens() - 1;

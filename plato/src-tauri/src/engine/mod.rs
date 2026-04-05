@@ -7,7 +7,7 @@ pub mod inference;
 
 pub struct PlatoEngineState {
     pub engine: Arc<Mutex<Option<InferenceEngine>>>,
-    // Thread-safe signal to kill active inference loops
+    // Atomic signal allowing the UI to interrupt generation across threads
     pub abort_signal: Arc<AtomicBool>,
 }
 
@@ -17,5 +17,11 @@ impl PlatoEngineState {
             engine: Arc::new(Mutex::new(None)),
             abort_signal: Arc::new(AtomicBool::new(false)),
         }
+    }
+}
+
+impl Default for PlatoEngineState {
+    fn default() -> Self {
+        Self::new()
     }
 }
