@@ -10,10 +10,11 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::AddBos;
 use llama_cpp_2::sampling::LlamaSampler;
+use llama_cpp_2::token::LlamaToken;
 
 #[allow(deprecated)]
 use llama_cpp_2::model::Special;
-use crate::models::{ChatTokenEvent, InferenceConfig, ACTIVE_MODEL, ModelTarget};
+use crate::models::{ChatTokenEvent, InferenceConfig};
 
 pub struct InferenceEngine {
     pub backend: Arc<LlamaBackend>,
@@ -29,8 +30,9 @@ impl InferenceEngine {
     }
 
     /**
-     * Executes the generative loop using a dynamic Sampler Chain.
-     * Prevents deterministic collapse through repetition penalties and nucleus sampling.
+     * Executes inference via Compile-Safe Explicit Token Parsing.
+     * Prevents loops by ensuring structural markers are treated as control IDs,
+     * and compiles safely by leaving flash attention defaults intact.
      */
     pub async fn stream_response(
         &self, 
@@ -44,63 +46,83 @@ impl InferenceEngine {
         let backend = Arc::clone(&self.backend);
 
         task::spawn_blocking(move || -> Result<(), String> {
-            let formatted_prompt = match ACTIVE_MODEL {
-                ModelTarget::Development => format!("<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", prompt),
-                ModelTarget::Production => format!("<|START_OF_TURN_TOKEN|><|USER_TOKEN|>{}<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>", prompt),
+            let mut tokens_list = Vec::new();
+
+            // 1. DYNAMIC CONTROL ID DISCOVERY
+            let get_id = |s: &str, fallback: i32| -> LlamaToken {
+                let t = model.str_to_token(s, AddBos::Never).unwrap_or_default();
+                if t.len() == 1 { t[0] } else { LlamaToken(fallback) }
             };
 
-            let max_context_size: u32 = match ACTIVE_MODEL {
-                ModelTarget::Development => 2048,
-                ModelTarget::Production => 8192,
-            };
+            let bos = model.token_bos();
+            let start = get_id("<|start_header_id|>", 128006);
+            let end = get_id("<|end_header_id|>", 128007);
+            let eot = get_id("<|eot_id|>", 128009);
 
-            let tokens_list = model.str_to_token(&formatted_prompt, AddBos::Always).map_err(|e| e.to_string())?;
+            // 2. BINARY SEQUENCE CONSTRUCTION
+            tokens_list.push(bos);
+            tokens_list.push(start);
+            tokens_list.extend(model.str_to_token("system", AddBos::Never).unwrap());
+            tokens_list.push(end);
+            tokens_list.extend(model.str_to_token("\nYou are a creative assistant.\n", AddBos::Never).unwrap());
+            tokens_list.push(eot);
+            tokens_list.push(start);
+            tokens_list.extend(model.str_to_token("user", AddBos::Never).unwrap());
+            tokens_list.push(end);
+            tokens_list.extend(model.str_to_token(&format!("\n{}\n", prompt), AddBos::Never).unwrap());
+            tokens_list.push(eot);
+            tokens_list.push(start);
+            tokens_list.extend(model.str_to_token("assistant", AddBos::Never).unwrap());
+            tokens_list.push(end);
+            tokens_list.extend(model.str_to_token("\n", AddBos::Never).unwrap());
+
+            let max_context_size: u32 = 2048;
             let mut ctx_params = LlamaContextParams::default();
+            
+            // COMPILER FIX: Removed the .with_flash_attention_policy(false) call.
             ctx_params = ctx_params.with_n_ctx(NonZeroU32::new(max_context_size));
             
             let mut ctx = model.new_context(&backend, ctx_params).map_err(|e| e.to_string())?;
             let mut batch = LlamaBatch::new(512, 1);
-            let last_index = tokens_list.len() - 1;
+            let last_idx = tokens_list.len() - 1;
 
             for (i, &token) in tokens_list.iter().enumerate() {
-                let is_last = i == last_index;
-                batch.add(token, i as i32, &[0], is_last).map_err(|e| e.to_string())?;
+                batch.add(token, i as i32, &[0], i == last_idx).map_err(|e| e.to_string())?;
             }
             ctx.decode(&mut batch).map_err(|e| e.to_string())?;
 
-            let mut n_cur = batch.n_tokens();
+            let mut current_pos = batch.n_tokens();
             
-            // Sampler chain combines creative variety with loop penalties.
+            // 3. STABILIZED SAMPLER CHAIN
             let mut sampler = LlamaSampler::chain_simple([
-                LlamaSampler::dist(42), 
-                LlamaSampler::temp(config.temperature), 
-                LlamaSampler::top_p(config.top_p, config.min_keep), 
-                LlamaSampler::top_k(config.top_k),
-                LlamaSampler::penalties(config.repeat_last_n, config.repeat_penalty, 0.0, 0.0),
-                LlamaSampler::greedy(),
+                LlamaSampler::penalties(64, 1.2, 0.0, 0.0),
+                LlamaSampler::top_k(40),
+                LlamaSampler::top_p(0.95, 1),
+                LlamaSampler::temp(config.temperature),
+                LlamaSampler::greedy(), // Deterministic selection 
             ]);
 
+            for &token in &tokens_list { sampler.accept(token); }
+
             loop {
-                let new_token_id = sampler.sample(&ctx, batch.n_tokens() - 1);
+                let logit_idx = batch.n_tokens() - 1;
+                let new_token_id = sampler.sample(&ctx, logit_idx);
+                sampler.accept(new_token_id);
+
                 if model.is_eog_token(new_token_id) { break; }
-                if (n_cur as u32) >= max_context_size - 1 { break; }
+                if (current_pos as u32) >= max_context_size - 1 { break; }
 
                 #[allow(deprecated)]
                 let token_bytes = model.token_to_bytes(new_token_id, Special::Tokenize).unwrap_or_default();
                 let token_str = String::from_utf8_lossy(&token_bytes).to_string();
 
-                let stop_marker = match ACTIVE_MODEL {
-                    ModelTarget::Development => "<|eot_id|>",
-                    ModelTarget::Production => "<|END_OF_TURN_TOKEN|>",
-                };
-
-                if token_str.contains(stop_marker) { break; }
-
-                let _ = app.emit("chat_token", ChatTokenEvent { message_id: message_id_clone.clone(), token: token_str, is_final: false });
+                let _ = app.emit("chat_token", ChatTokenEvent { 
+                    message_id: message_id_clone.clone(), token: token_str, is_final: false 
+                });
 
                 batch.clear();
-                batch.add(new_token_id, n_cur, &[0], true).map_err(|e| e.to_string())?;
-                n_cur += 1;
+                batch.add(new_token_id, current_pos, &[0], true).map_err(|e| e.to_string())?;
+                current_pos += 1;
                 ctx.decode(&mut batch).map_err(|e| e.to_string())?;
             }
 

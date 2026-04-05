@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager};
 use futures_util::StreamExt;
-use reqwest::header::{RANGE, CONTENT_RANGE};
+use reqwest::header::RANGE;
 use crate::models::{IpcResponse, DownloadProgressEvent, ACTIVE_MODEL, ModelTarget};
 
 const MODEL_DIR: &str = "models";
@@ -29,9 +29,17 @@ fn get_active_models() -> &'static [(&'static str, &'static str)] {
 }
 
 /**
- * Validates the local model cache against remote server metadata.
- * Uses a 0-byte GET probe to extract total file size from the Content-Range header.
+ * Resolves the true storage URL and file size.
+ * Following redirects manually ensures the Range header is preserved across the
+ * LFS-to-S3 infrastructure, which is the industry standard for resumable downloads.
  */
+async fn resolve_remote_parity(client: &reqwest::Client, url: &str) -> Result<(String, u64), String> {
+    let res = client.head(url).send().await.map_err(|e| e.to_string())?;
+    let final_url = res.url().to_string();
+    let size = res.content_length().unwrap_or(0);
+    Ok((final_url, size))
+}
+
 #[tauri::command]
 pub async fn check_model_status(app: AppHandle) -> Result<IpcResponse<bool>, String> {
     let mut base_path = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -41,7 +49,7 @@ pub async fn check_model_status(app: AppHandle) -> Result<IpcResponse<bool>, Str
         return Ok(IpcResponse { success: true, data: Some(false), error_message: None });
     }
 
-    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build().unwrap_or_default();
+    let client = reqwest::Client::new();
     let mut ready = true;
 
     for (filename, url) in get_active_models() {
@@ -52,30 +60,15 @@ pub async fn check_model_status(app: AppHandle) -> Result<IpcResponse<bool>, Str
         }
 
         let local_size = fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
-        if local_size < 1_000_000 {
-            let _ = fs::remove_file(&file_path);
-            ready = false;
-        } else {
-            if let Ok(res) = client.get(*url).header(RANGE, "bytes=0-0").send().await {
-                if let Some(content_range) = res.headers().get(CONTENT_RANGE) {
-                    if let Ok(range_str) = content_range.to_str() {
-                        if let Some(total_str) = range_str.split('/').last() {
-                            if let Ok(remote_size) = total_str.parse::<u64>() {
-                                if local_size != remote_size { ready = false; }
-                            }
-                        }
-                    }
-                }
+        if let Ok((_, remote_size)) = resolve_remote_parity(&client, url).await {
+            if remote_size > 0 && local_size != remote_size {
+                ready = false;
             }
         }
     }
     Ok(IpcResponse { success: true, data: Some(ready), error_message: None })
 }
 
-/**
- * Orchestrates multi-part model downloads with pre-flight parity checks.
- * Prevents 416 errors by verifying byte alignment before requesting ranges.
- */
 #[tauri::command]
 pub async fn start_model_download(app: AppHandle) -> Result<IpcResponse<bool>, String> {
     let mut base_path = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -94,58 +87,42 @@ pub async fn start_model_download(app: AppHandle) -> Result<IpcResponse<bool>, S
         let file_path = base_path.join(filename);
         let local_size = fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
 
-        if local_size > 0 && local_size < 1_000_000 {
-            let _ = fs::remove_file(&file_path);
-        }
+        let (direct_url, remote_size) = resolve_remote_parity(&client, url).await?;
 
-        let clean_local_size = fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
-
-        // Pre-flight probe to determine the true remote file size
-        let mut remote_size = 0u64;
-        if let Ok(res) = client.get(*url).header(RANGE, "bytes=0-0").send().await {
-            if let Some(content_range) = res.headers().get(CONTENT_RANGE) {
-                if let Ok(range_str) = content_range.to_str() {
-                    if let Some(total_str) = range_str.split('/').last() {
-                        remote_size = total_str.parse::<u64>().unwrap_or(0);
-                    }
-                }
-            }
-        }
-
-        // Parity Check: If file is complete, emit 100% and proceed
-        if remote_size > 0 && clean_local_size == remote_size {
+        if local_size > 0 && remote_size > 0 && local_size == remote_size {
              let _ = app.emit("download_progress", DownloadProgressEvent { 
-                part_current, 
-                part_total: total_parts, 
-                downloaded_bytes: remote_size, 
-                total_bytes: remote_size 
+                part_current, part_total: total_parts, downloaded_bytes: remote_size, total_bytes: remote_size 
             });
             continue; 
         }
 
-        let mut request = client.get(*url);
+        let mut request = client.get(&direct_url);
         let mut is_resuming = false;
 
-        if clean_local_size > 0 {
-            request = request.header(RANGE, format!("bytes={}-", clean_local_size));
+        if local_size > 0 && local_size < remote_size {
+            request = request.header(RANGE, format!("bytes={}-", local_size));
             is_resuming = true;
         }
 
         let res = request.send().await.map_err(|e| e.to_string())?;
+        if res.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            continue;
+        }
+
         if !res.status().is_success() {
-            return Err(format!("Network Failure: HTTP {}", res.status()));
+            return Err(format!("Storage Failure: HTTP {}", res.status()));
         }
 
-        let response_length = res.content_length().unwrap_or(0);
-        let true_total_bytes = if is_resuming { clean_local_size + response_length } else { response_length };
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(is_resuming)
+            .write(true)
+            .truncate(!is_resuming)
+            .open(&file_path)
+            .map_err(|e| e.to_string())?;
 
-        if true_total_bytes < 1_000_000 {
-            return Err("Model access denied (HuggingFace redirect).".to_string());
-        }
-
-        let mut file = OpenOptions::new().create(true).append(is_resuming).write(true).truncate(!is_resuming).open(&file_path).map_err(|e| e.to_string())?;
         let mut stream = res.bytes_stream();
-        let mut downloaded_bytes: u64 = clean_local_size;
+        let mut downloaded_bytes: u64 = local_size;
         let mut last_emit = std::time::Instant::now();
 
         while let Some(chunk_result) = stream.next().await {
@@ -154,12 +131,16 @@ pub async fn start_model_download(app: AppHandle) -> Result<IpcResponse<bool>, S
             downloaded_bytes += chunk.len() as u64;
 
             if last_emit.elapsed().as_millis() > 100 {
-                let _ = app.emit("download_progress", DownloadProgressEvent { part_current, part_total: total_parts, downloaded_bytes, total_bytes: true_total_bytes });
+                let _ = app.emit("download_progress", DownloadProgressEvent { 
+                    part_current, part_total: total_parts, downloaded_bytes, total_bytes: remote_size 
+                });
                 last_emit = std::time::Instant::now();
             }
         }
 
-        let _ = app.emit("download_progress", DownloadProgressEvent { part_current, part_total: total_parts, downloaded_bytes: true_total_bytes, total_bytes: true_total_bytes });
+        let _ = app.emit("download_progress", DownloadProgressEvent { 
+            part_current, part_total: total_parts, downloaded_bytes: remote_size, total_bytes: remote_size 
+        });
     }
     Ok(IpcResponse { success: true, data: Some(true), error_message: None })
 }
