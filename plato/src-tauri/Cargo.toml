@@ -17,7 +17,8 @@ serde_json = "1.0"
 reqwest = { version = "0.13", features = ["stream"] }
 tokio = { version = "1.0", features = ["full"] }
 futures-util = "0.3"
-llama-cpp-2 = "0.1"
+# The 'sampler' feature is required for the production-level LlamaSampler chain
+llama-cpp-2 = { version = "0.1", features = ["sampler"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

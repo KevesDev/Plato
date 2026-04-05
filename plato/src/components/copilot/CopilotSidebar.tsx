@@ -23,10 +23,8 @@ export const CopilotSidebar: React.FC = () => {
     ]);
 
     useEffect(() => {
-        // High-frequency listener mapping incoming IPC tokens directly to the target message block
         const unlisten = listen<ChatTokenEvent>('chat_token', (event) => {
             const { message_id, token, is_final } = event.payload;
-            
             setMessages(prev => {
                 const existingIndex = prev.findIndex(m => m.id === message_id);
                 if (existingIndex >= 0) {
@@ -37,33 +35,23 @@ export const CopilotSidebar: React.FC = () => {
                     return [...prev, { id: message_id, role: 'ai', content: token }];
                 }
             });
-
-            if (is_final) {
-                setIsStreaming(false);
-            }
+            if (is_final) setIsStreaming(false);
         });
-
-        return () => {
-            unlisten.then(f => f());
-        };
+        return () => { unlisten.then(f => f()); };
     }, []);
 
     const handleSend = async () => {
         if (!input.trim() || isStreaming) return;
-        
         const prompt = input.trim();
         const messageId = Date.now().toString();
         const responseId = `ai-${messageId}`;
-        
         setMessages(prev => [...prev, { id: messageId, role: 'user', content: prompt }]);
         setInput('');
         setIsStreaming(true);
-        
         try {
-            // FIXED: Using camelCase messageId to align with Tauri's automatic argument resolution
-            await invoke('stream_chat_completion', { messageId: responseId, prompt });
+            const config = { temperature: 0.7, top_p: 0.9, min_keep: 1, top_k: 40, repeat_penalty: 1.1, repeat_last_n: 64 };
+            await invoke('stream_chat_completion', { messageId: responseId, prompt, config });
         } catch (error) {
-            console.error("Inference Error:", error);
             setMessages(prev => [...prev, { id: `err-${Date.now()}`, role: 'ai', content: `[Engine Failure]: ${error}` }]);
             setIsStreaming(false);
         }
@@ -78,7 +66,6 @@ export const CopilotSidebar: React.FC = () => {
                     <span>0 Files Indexed</span>
                 </div>
             </div>
-
             <div className="flex-grow overflow-y-auto p-4 space-y-4">
                 {messages.map(msg => (
                     <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
@@ -91,7 +78,6 @@ export const CopilotSidebar: React.FC = () => {
                     </div>
                 ))}
             </div>
-
             <div className="p-4 border-t border-gray-200 dark:border-gray-800 bg-slate-50 dark:bg-slate-900">
                 <div className="relative flex items-center">
                     <textarea 
@@ -100,22 +86,10 @@ export const CopilotSidebar: React.FC = () => {
                         value={input}
                         disabled={isStreaming}
                         onChange={(e) => setInput(e.target.value)}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                                e.preventDefault();
-                                handleSend();
-                            }
-                        }}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
                     />
-                    <button 
-                        onClick={handleSend}
-                        disabled={isStreaming || !input.trim()}
-                        className={`absolute right-2 p-2 transition-colors ${isStreaming || !input.trim() ? 'text-slate-300 dark:text-slate-700' : 'text-slate-400 hover:text-blue-600 dark:hover:text-blue-400'}`}
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <line x1="22" y1="2" x2="11" y2="13"></line>
-                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                        </svg>
+                    <button onClick={handleSend} disabled={isStreaming || !input.trim()} className={`absolute right-2 p-2 transition-colors ${isStreaming || !input.trim() ? 'text-slate-300 dark:text-slate-700' : 'text-slate-400 hover:text-blue-600 dark:hover:text-blue-400'}`}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
                     </button>
                 </div>
             </div>

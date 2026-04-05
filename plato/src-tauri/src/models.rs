@@ -18,6 +18,18 @@ pub struct SystemHealthStatus {
 
 // --- Phase 2: Inference & Engine Models ---
 
+/**
+ * MASTER SWITCH: Toggle this to ModelTarget::Production to switch 
+ * the entire application stack to Command R+ (104B).
+ */
+pub const ACTIVE_MODEL: ModelTarget = ModelTarget::Development;
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ModelTarget {
+    Development, // Llama 3.1 8B
+    Production,  // Command R+ 104B
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct IpcResponse<T> {
     pub success: bool,
@@ -33,9 +45,16 @@ pub struct DownloadProgressEvent {
     pub total_bytes: u64,
 }
 
-/// Emitted by the Inference Engine during text generation.
-/// Carries a unique identifier to ensure the frontend appends the token
-/// to the correct message block in the chat history.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct InferenceConfig {
+    pub temperature: f32,
+    pub top_p: f32,
+    pub min_keep: usize,
+    pub top_k: i32,
+    pub repeat_penalty: f32,
+    pub repeat_last_n: i32,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ChatTokenEvent {
     pub message_id: String,
