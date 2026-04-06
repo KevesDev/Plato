@@ -31,16 +31,25 @@ export const LorebookTab: React.FC<LorebookTabProps> = ({ workspace }) => {
         setSaveStatus('idle');
 
         try {
-            const response = await invoke<{ success: boolean }>('save_lore_entity', {
+            // CRITICAL FIX: Explicitly passing workspacePath to the Rust backend 
+            // so it knows exactly where to write the physical Markdown file.
+            const response = await invoke<{ success: boolean, data?: number }>('save_lore_entity', {
                 name: name.trim(),
                 category,
-                description: description.trim()
+                description: description.trim(),
+                workspacePath: workspace.active_directory_path 
             });
 
-            if (response.success) {
+            if (response.success && response.data !== undefined) {
                 setSaveStatus('success');
                 setName('');
                 setDescription('');
+                
+                // Fire a global event to instantly update the file count in the Toolbar
+                window.dispatchEvent(new CustomEvent('plato-workspace-update', {
+                    detail: { indexed_file_count: response.data }
+                }));
+
                 setTimeout(() => setSaveStatus('idle'), 3000);
             }
         } catch (error) {
@@ -110,9 +119,9 @@ export const LorebookTab: React.FC<LorebookTabProps> = ({ workspace }) => {
                     {isSaving ? (
                         <><DatabaseZap size={16} className="animate-pulse" /> Injecting Matrix...</>
                     ) : saveStatus === 'success' ? (
-                        <><CheckCircle2 size={16} /> Saved to Memory</>
+                        <><CheckCircle2 size={16} /> Saved to Vault & Memory</>
                     ) : (
-                        <><DatabaseZap size={16} /> Save to Memory Matrix</>
+                        <><DatabaseZap size={16} /> Save to Vault & Memory</>
                     )}
                 </button>
             </div>

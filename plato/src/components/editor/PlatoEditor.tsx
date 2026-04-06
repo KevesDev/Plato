@@ -6,14 +6,11 @@ import { HistoryPlugin } from '@lexical/react/LexicalHistoryPlugin';
 import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin';
 import { PaginatedCanvasWrapper } from './plugins/PaginatedCanvasWrapper';
 import { AIGeneratedNode } from './nodes/AIGeneratedNode';
+import { MentionNode } from './nodes/MentionNode';
 import AICompletionPlugin from './plugins/AICompletionPlugin';
-// Using named import to match the export structure in theme.ts
+import { LorebookMentionPlugin } from './plugins/LorebookMentionPlugin';
 import { theme as editorTheme } from './theme';
 
-/**
- * The core Lexical editor component for Plato.
- * Uses a named export to align with the routing/import logic in App.tsx.
- */
 export const PlatoEditor: React.FC = () => {
     const initialConfig = useMemo(() => ({
         namespace: 'PlatoEditor',
@@ -21,7 +18,7 @@ export const PlatoEditor: React.FC = () => {
         onError: (error: Error) => {
             console.error('[Lexical Error]:', error);
         },
-        nodes: [AIGeneratedNode],
+        nodes: [AIGeneratedNode, MentionNode],
     }), []);
 
     return (
@@ -43,6 +40,7 @@ export const PlatoEditor: React.FC = () => {
                     />
                     <HistoryPlugin />
                     <AICompletionPlugin />
+                    <LorebookMentionPlugin />
                 </PaginatedCanvasWrapper>
             </div>
         </LexicalComposer>

@@ -21,7 +21,8 @@ fn main() -> Result<(), tauri::Error> {
             select_and_scan_workspace,
             start_workspace_ingestion,
             save_lore_entity,
-            load_persisted_workspace
+            load_persisted_workspace,
+            get_lorebook_entries // <-- Appended for Task 3.3
         ])
         .run(tauri::generate_context!())?;
     

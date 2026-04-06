@@ -46,7 +46,6 @@ export const CopilotSidebar: React.FC<CopilotSidebarProps> = ({ workspace }) => 
         };
         setup();
 
-        // Listen for the DB Sync notification dispatched globally by the Toolbar
         const handleSysMsg = (e: Event) => {
             const customEvent = e as CustomEvent;
             setMessages(prev => [...prev, { 
@@ -88,7 +87,13 @@ export const CopilotSidebar: React.FC<CopilotSidebarProps> = ({ workspace }) => 
         
         try {
             const config = { temperature: 0.7, top_p: 0.9, min_keep: 1, top_k: 40, repeat_penalty: 1.2, repeat_last_n: 64 };
-            await invoke('stream_chat_completion', { messageId: responseId, history, config });
+            // CRITICAL FIX: Using snake_case
+            await invoke('stream_chat_completion', { 
+                messageId: responseId, 
+                history, 
+                config,
+                context_entities: null
+            });
         } catch (error) {
             console.error('[Plato IPC Error]:', error);
             setIsStreaming(false);

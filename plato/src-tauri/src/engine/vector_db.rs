@@ -3,13 +3,8 @@ use std::path::PathBuf;
 use tokio::task;
 use tokio::sync::RwLock;
 use serde::{Serialize, Deserialize};
-// Removed the deprecated TextEmbeddingUserDefined import
 use fastembed::{TextEmbedding, InitOptions};
 
-/**
- * Native, lightweight vector memory matrix.
- * Strictly local, file-based persistence without compiler panics.
- */
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MemoryRecord {
     pub file_path: String,
@@ -25,7 +20,6 @@ pub struct VectorDatabase {
 
 impl VectorDatabase {
     pub async fn new(db_dir: &PathBuf) -> Result<Self, String> {
-        // Ensure the data directory exists
         if !db_dir.exists() {
             std::fs::create_dir_all(db_dir).map_err(|e| format!("Failed to create DB directory: {}", e))?;
         }
@@ -33,7 +27,6 @@ impl VectorDatabase {
         let file_path = db_dir.join("matrix.json");
         let mut records = Vec::new();
 
-        // Load existing memories if they exist
         if file_path.exists() {
             if let Ok(data) = std::fs::read_to_string(&file_path) {
                 if let Ok(parsed) = serde_json::from_str(&data) {
@@ -56,7 +49,6 @@ impl VectorDatabase {
             let options = InitOptions::new(fastembed::EmbeddingModel::AllMiniLML6V2)
                 .with_show_download_progress(false);
                 
-            // FIX: Declared as `mut` to allow FastEmbed to internally cache tensors
             let mut model = TextEmbedding::try_new(options)
                 .map_err(|e| format!("Embedding Model Initialization Failed: {}", e))?;
 
@@ -77,11 +69,9 @@ impl VectorDatabase {
             });
         }
 
-        // Thread-safe state mutation
         let mut records_lock = self.records.write().await;
         records_lock.extend(new_records);
         
-        // Persist the matrix directly to disk
         let data = serde_json::to_string(&*records_lock).map_err(|e| format!("Serialization Failed: {}", e))?;
         std::fs::write(&self.db_path, data).map_err(|e| format!("Disk Write Failed: {}", e))?;
 
@@ -90,7 +80,6 @@ impl VectorDatabase {
 
     /**
      * Executes a mathematical Cosine Similarity search against the entire memory matrix.
-     * Returns the 'top_k' most semantically relevant text chunks.
      */
     pub async fn search_matrix(&self, query: &str, top_k: usize) -> Result<Vec<String>, String> {
         let records = self.records.read().await.clone();
@@ -110,7 +99,6 @@ impl VectorDatabase {
                 
             let query_vector = &embeddings[0];
             
-            // Execute Cosine Similarity equation across the tensor array
             let mut scored_records: Vec<(f32, String)> = records.iter().map(|record| {
                 let mut dot_product = 0.0;
                 let mut norm_a = 0.0;
@@ -128,7 +116,6 @@ impl VectorDatabase {
                 (similarity, record.text.clone())
             }).collect();
             
-            // Sort by descending similarity score
             scored_records.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
             
             let top_results: Vec<String> = scored_records.into_iter()
@@ -140,5 +127,43 @@ impl VectorDatabase {
         }).await.map_err(|e| format!("Search Thread Panic: {}", e))??;
 
         Ok(search_result)
+    }
+
+    /**
+     * SURGICAL STRIKE: Bypasses vector math to grab the exact Lorebook card requested by the Editor.
+     */
+    pub async fn get_exact_lore_entry(&self, entity_name: &str) -> Option<String> {
+        let records = self.records.read().await;
+        let target = format!("] {}:", entity_name.to_lowercase());
+        
+        for record in records.iter() {
+            if record.text.starts_with("[Entity Type:") && record.text.to_lowercase().contains(&target) {
+                return Some(record.text.clone());
+            }
+        }
+        None
+    }
+
+    /**
+     * AUTO-DETECTION: Scans a user's chat prompt and automatically pulls Lorebook cards if mentioned.
+     */
+    pub async fn get_lore_entries_in_text(&self, text: &str) -> Vec<String> {
+        let records = self.records.read().await;
+        let mut results = Vec::new();
+        let lower_text = text.to_lowercase();
+        
+        for record in records.iter() {
+            if record.text.starts_with("[Entity Type:") {
+                if let Some(start) = record.text.find("] ") {
+                    if let Some(end) = record.text[start..].find(":") {
+                        let name = &record.text[start + 2 .. start + end];
+                        if name.len() > 2 && lower_text.contains(&name.to_lowercase()) {
+                            results.push(record.text.clone());
+                        }
+                    }
+                }
+            }
+        }
+        results
     }
 }
