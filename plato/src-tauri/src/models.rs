@@ -3,6 +3,11 @@ use serde::{Deserialize, Serialize};
 // --- Workspace & State Models ---
 
 #[derive(Serialize, Deserialize, Clone)]
+pub struct PlatoConfig {
+    pub active_workspace: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct WorkspaceState {
     pub active_directory_path: Option<String>,
     pub indexed_file_count: u32,

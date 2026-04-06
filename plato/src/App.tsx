@@ -1,32 +1,35 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { MainLayout } from './components/layout/MainLayout';
+import { Toolbar, WorkspaceState } from './components/layout/Toolbar';
 import { PlatoEditor } from './components/editor/PlatoEditor';
 import { CopilotSidebar } from './components/copilot/CopilotSidebar';
 import { OnboardingScreen } from './components/onboarding/OnboardingScreen';
 import { IpcResponse } from './types/ipc.types';
 import './App.css'; 
 
-/**
- * Plato Application Root
- * Orchestrates the application lifecycle by verifying engine readiness
- * and establishing the C++ memory lock before mounting the primary interfaces.
- */
 function App() {
     const [isEngineReady, setIsEngineReady] = useState<boolean>(false);
     const [isChecking, setIsChecking] = useState<boolean>(true);
     const [engineError, setEngineError] = useState<string | null>(null);
+    const [workspace, setWorkspace] = useState<WorkspaceState>({
+        active_directory_path: null,
+        indexed_file_count: 0,
+        is_indexing: false
+    });
 
     useEffect(() => {
-        /**
-         * Performs a non-blocking check for local model assets on application boot.
-         * If assets exist, it immediately attempts to load the engine into memory.
-         */
         const checkStatusAndBoot = async () => {
             try {
+                // 1. Instantly check disk for a previously saved vault
+                const wsResponse = await invoke<IpcResponse<WorkspaceState>>('load_persisted_workspace');
+                if (wsResponse.success && wsResponse.data) {
+                    setWorkspace(wsResponse.data);
+                }
+
+                // 2. Load the AI Inference Engine into memory
                 const response = await invoke<IpcResponse<boolean>>('check_model_status');
                 if (response.success && response.data) {
-                    // Files exist. Now load the inference engine into RAM.
                     await invoke('initialize_engine');
                     setIsEngineReady(true);
                 }
@@ -41,10 +44,6 @@ function App() {
         checkStatusAndBoot();
     }, []);
 
-    /**
-     * Triggered by the OnboardingScreen once the download completes 100%.
-     * We must wait for the Rust thread to allocate the memory before removing the loading UI.
-     */
     const handleOnboardingComplete = async () => {
         try {
             await invoke('initialize_engine');
@@ -55,12 +54,10 @@ function App() {
         }
     };
 
-    // Show a blank/loading state while the integrity check is running
     if (isChecking) {
         return <div className="w-screen h-screen bg-slate-50 dark:bg-slate-950" />;
     }
 
-    // Critical memory failure state
     if (engineError) {
         return (
             <div className="w-screen h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 p-8">
@@ -72,15 +69,15 @@ function App() {
         );
     }
 
-    // Force onboarding if the model integrity check fails
     if (!isEngineReady) {
         return <OnboardingScreen onComplete={handleOnboardingComplete} />;
     }
 
     return (
         <MainLayout 
+            toolbar={<Toolbar workspace={workspace} setWorkspace={setWorkspace} />}
             editor={<PlatoEditor />} 
-            sidebar={<CopilotSidebar />} 
+            sidebar={<CopilotSidebar workspace={workspace} />} 
         />
     );
 }

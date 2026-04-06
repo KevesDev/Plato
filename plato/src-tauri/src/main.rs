@@ -19,7 +19,9 @@ fn main() -> Result<(), tauri::Error> {
             stream_chat_completion,
             abort_inference,
             select_and_scan_workspace,
-            start_workspace_ingestion
+            start_workspace_ingestion,
+            save_lore_entity,
+            load_persisted_workspace
         ])
         .run(tauri::generate_context!())?;
     
